@@ -80,19 +80,11 @@ extern bool    InpUseTimeFilter      = true;           // Usar filtro horario
 extern int     InpStartHour          = 8;              // Hora inicio (UTC)
 extern int     InpEndHour            = 22;             // Hora fin (UTC)
 
-extern string  _REMOTE               = "═══ CONTROL REMOTO (AlgoTrade) ═══";
-extern bool    InpRemoteControl      = true;                                                              // Respetar pausa desde la app web
-extern string  InpBotId              = "${bot.id || ''}";                                                 // ID del bot (no editar)
-extern string  InpStatusUrl          = "https://algotrade-backend-production-5f1f.up.railway.app";        // Endpoint
-extern int     InpStatusCheckSec     = 30;                                                                // Cada cuánto consultar (s)
-
 //--- Variables globales
 double initialBalance;
 double dailyStartBalance;
 datetime lastDayCheck;
 int lastBarTime = 0;
-datetime lastStatusCheck = 0;
-bool     remoteActive = true;
 
 //+------------------------------------------------------------------+
 //| Initialization                                                   |
@@ -122,46 +114,6 @@ int OnInit()
 void OnDeinit(const int reason)
 {
    Print("Bot detenido. Razón: ", reason);
-}
-
-//+------------------------------------------------------------------+
-//| Verificar estado remoto del bot (control desde la app web)       |
-//+------------------------------------------------------------------+
-bool CheckRemoteStatus()
-{
-   if(!InpRemoteControl) return true;
-   if(StringLen(InpBotId) == 0) return true;
-   if(TimeCurrent() - lastStatusCheck < InpStatusCheckSec) return remoteActive;
-   lastStatusCheck = TimeCurrent();
-
-   string url = InpStatusUrl + "/api/bots/" + InpBotId + "/status";
-   string headers = "";
-   string cookie = NULL;
-   string referer = NULL;
-   char data[], result[];
-   string resultHeaders;
-   int timeout = 5000;
-
-   ResetLastError();
-   int code = WebRequest("GET", url, cookie, referer, timeout, data, 0, result, resultHeaders);
-   if(code == -1)
-   {
-      Print("⚠️ WebRequest falló. Añade la URL a Herramientas → Opciones → Asesores → URLs permitidas: ", InpStatusUrl);
-      return remoteActive;
-   }
-   if(code == 200)
-   {
-      string body = CharArrayToString(result);
-      bool nowActive = (StringFind(body, "\\"status\\":\\"active\\"") >= 0);
-      if(nowActive != remoteActive)
-      {
-         Print(nowActive ? "▶ Bot ACTIVADO desde la app" : "⏸ Bot PAUSADO desde la app");
-         remoteActive = nowActive;
-      }
-      return remoteActive;
-   }
-   Print("⚠️ Estado remoto HTTP ", code);
-   return remoteActive;
 }
 
 //+------------------------------------------------------------------+
@@ -232,7 +184,6 @@ bool HasOpenPosition()
 //+------------------------------------------------------------------+
 void OnTick()
 {
-   if(!CheckRemoteStatus()) return; // Pausado desde la app
    if(!CheckDailyLoss()) return;
    if(!IsTradingHours()) return;
    if(HasOpenPosition()) return; // Solo una posición a la vez
