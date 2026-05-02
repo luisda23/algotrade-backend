@@ -11,6 +11,12 @@ interface BotParams {
     posSize?: number;
     dailyLoss?: number;
   };
+  news?: {
+    enabled?: boolean;
+    beforeMin?: number;
+    afterMin?: number;
+    impactMin?: 'high' | 'medium' | 'all';
+  };
   funded?: { enabled?: boolean; firm?: string };
 }
 
@@ -32,6 +38,13 @@ export function generateMQL5(bot: {
   const symbol = pair.replace('/', '');
   const indicators = p.indicators || [];
   const strategy = bot.strategy || 'momentum';
+  const news = p.news || {};
+  const newsEnabled = news.enabled !== false;
+  const newsBefore = news.beforeMin ?? 30;
+  const newsAfter = news.afterMin ?? 15;
+  const newsImpactMQL = news.impactMin === 'all' ? 'CALENDAR_IMPORTANCE_LOW'
+                     : news.impactMin === 'medium' ? 'CALENDAR_IMPORTANCE_MODERATE'
+                     : 'CALENDAR_IMPORTANCE_HIGH';
   const generatedDate = new Date().toISOString().split('T')[0];
 
   // Mapear estrategia a comentario descriptivo
@@ -82,6 +95,12 @@ input group    "═══ HORARIO DE OPERACIÓN ═══"
 input bool     InpUseTimeFilter    = true;               // Usar filtro horario
 input int      InpStartHour        = 8;                  // Hora inicio (UTC)
 input int      InpEndHour          = 22;                 // Hora fin (UTC)
+
+input group    "═══ FILTRO DE NOTICIAS ═══"
+input bool     InpFilterNews       = ${newsEnabled};                // Pausar bot durante noticias
+input int      InpNewsMinutesBefore = ${newsBefore};                // Minutos antes de la noticia
+input int      InpNewsMinutesAfter  = ${newsAfter};                 // Minutos después de la noticia
+input ENUM_CALENDAR_EVENT_IMPORTANCE InpNewsMinImpact = ${newsImpactMQL}; // Impacto mínimo a evitar
 
 //--- Variables globales
 CTrade        trade;
@@ -154,6 +173,48 @@ ${indicators.includes('atr') ? '   IndicatorRelease(handleATR);' : ''}
 }
 
 //+------------------------------------------------------------------+
+//| Filtro de noticias: usa el calendario económico de MetaTrader    |
+//| para evitar operar en ventanas alrededor de eventos relevantes.  |
+//+------------------------------------------------------------------+
+bool IsNewsTime()
+{
+   if(!InpFilterNews) return false;
+
+   // Buscar la divisa base y cotizada del símbolo (ej. EURUSD → EUR, USD)
+   string base = StringSubstr(InpSymbol, 0, 3);
+   string quote = StringSubstr(InpSymbol, 3, 3);
+
+   datetime fromTime = TimeCurrent() - InpNewsMinutesAfter * 60;
+   datetime toTime   = TimeCurrent() + InpNewsMinutesBefore * 60;
+
+   string countries[2] = { base, quote };
+   for(int c = 0; c < 2; c++)
+   {
+      MqlCalendarValue values[];
+      // CalendarValueHistory devuelve eventos en el rango pedido para el país
+      // (la divisa se mapea a su país emisor automáticamente: EUR→EU, USD→US, etc.)
+      int n = CalendarValueHistory(values, fromTime, toTime, NULL, countries[c]);
+      for(int i = 0; i < n; i++)
+      {
+         MqlCalendarEvent ev;
+         if(!CalendarEventById(values[i].event_id, ev)) continue;
+         if(ev.importance < InpNewsMinImpact) continue;
+
+         long  evTime = (long)values[i].time;
+         long  now    = (long)TimeCurrent();
+         long  diff   = evTime - now;
+
+         // Estamos dentro de la ventana [-after, +before] respecto al evento
+         if(diff <= InpNewsMinutesBefore * 60 && diff >= -InpNewsMinutesAfter * 60)
+         {
+            return true;
+         }
+      }
+   }
+   return false;
+}
+
+//+------------------------------------------------------------------+
 //| Verificar pérdida diaria máxima                                  |
 //+------------------------------------------------------------------+
 bool CheckDailyLoss()
@@ -218,6 +279,7 @@ void OnTick()
 {
    if(!CheckDailyLoss()) return;
    if(!IsTradingHours()) return;
+   if(IsNewsTime()) return; // Pausado por noticia inminente / reciente
    if(PositionsTotal() > 0) return; // Solo una posición a la vez
 
    // Verificar si hay nuevas barras
