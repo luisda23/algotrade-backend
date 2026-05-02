@@ -15,6 +15,7 @@ interface BotParams {
 }
 
 export function generateMQL5(bot: {
+  id?: string;
   name: string;
   description?: string | null;
   strategy: string;
@@ -82,6 +83,12 @@ input bool     InpUseTimeFilter    = true;               // Usar filtro horario
 input int      InpStartHour        = 8;                  // Hora inicio (UTC)
 input int      InpEndHour          = 22;                 // Hora fin (UTC)
 
+input group    "═══ CONTROL REMOTO (AlgoTrade) ═══"
+input bool     InpRemoteControl    = true;                                                              // Respetar pausa desde la app web
+input string   InpBotId            = "${bot.id || ''}";                                                 // ID del bot (no editar)
+input string   InpStatusUrl        = "https://algotrade-backend-production-5f1f.up.railway.app";        // Endpoint de estado
+input int      InpStatusCheckSec   = 30;                                                                // Cada cuánto consultar estado (s)
+
 //--- Variables globales
 CTrade        trade;
 CPositionInfo position;
@@ -90,6 +97,8 @@ CSymbolInfo   symbolInfo;
 double initialBalance;
 double dailyStartBalance;
 datetime lastDayCheck;
+datetime lastStatusCheck = 0;
+bool    remoteActive = true;
 ${indicators.includes('rsi') ? 'int handleRSI;' : ''}
 ${indicators.includes('ema') ? 'int handleEMA_fast;\nint handleEMA_slow;' : ''}
 ${indicators.includes('macd') ? 'int handleMACD;' : ''}
@@ -150,6 +159,52 @@ ${indicators.includes('ema') ? '   IndicatorRelease(handleEMA_fast);\n   Indicat
 ${indicators.includes('macd') ? '   IndicatorRelease(handleMACD);' : ''}
 ${indicators.includes('bb') ? '   IndicatorRelease(handleBB);' : ''}
 ${indicators.includes('atr') ? '   IndicatorRelease(handleATR);' : ''}
+}
+
+//+------------------------------------------------------------------+
+//| Verificar estado remoto del bot (control desde la app web)       |
+//+------------------------------------------------------------------+
+bool CheckRemoteStatus()
+{
+   if(!InpRemoteControl) return true;
+   if(StringLen(InpBotId) == 0) return true;
+
+   // Solo consultar cada InpStatusCheckSec segundos
+   if(TimeCurrent() - lastStatusCheck < InpStatusCheckSec) return remoteActive;
+   lastStatusCheck = TimeCurrent();
+
+   string url = InpStatusUrl + "/api/bots/" + InpBotId + "/status";
+   string headers = "";
+   char data[], result[];
+   string resultHeaders;
+   int timeout = 5000;
+
+   ResetLastError();
+   int code = WebRequest("GET", url, headers, timeout, data, result, resultHeaders);
+
+   if(code == -1)
+   {
+      // Error: probablemente la URL no está en la lista de URLs permitidas
+      // Herramientas → Opciones → Asesores Expertos → Permitir WebRequest para URL
+      Print("⚠️ WebRequest falló. Añade la URL a la lista de URLs permitidas en MT5: ", InpStatusUrl);
+      return remoteActive; // Mantener último estado conocido
+   }
+
+   if(code == 200)
+   {
+      string body = CharArrayToString(result);
+      // Parseo simple del JSON {"status":"active"} o {"status":"paused"}
+      bool nowActive = (StringFind(body, "\\"status\\":\\"active\\"") >= 0);
+      if(nowActive != remoteActive)
+      {
+         Print(nowActive ? "▶ Bot ACTIVADO desde la app" : "⏸ Bot PAUSADO desde la app");
+         remoteActive = nowActive;
+      }
+      return remoteActive;
+   }
+
+   Print("⚠️ Estado remoto HTTP ", code);
+   return remoteActive;
 }
 
 //+------------------------------------------------------------------+
@@ -215,6 +270,7 @@ double CalculateLotSize(double stopLossPips)
 //+------------------------------------------------------------------+
 void OnTick()
 {
+   if(!CheckRemoteStatus()) return; // Pausado desde la app
    if(!CheckDailyLoss()) return;
    if(!IsTradingHours()) return;
    if(PositionsTotal() > 0) return; // Solo una posición a la vez

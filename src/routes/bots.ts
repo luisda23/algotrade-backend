@@ -6,6 +6,23 @@ import { generateMQL4 } from '../utils/mql4Generator';
 
 const router = Router();
 
+// Endpoint público para que el EA consulte el estado del bot
+// (sin auth porque el EA corre en MT5 del usuario y solo lee el estado por id)
+router.get('/:botId/status', async (req, res: Response) => {
+  try {
+    const { botId } = req.params;
+    const bot = await prisma.bot.findUnique({
+      where: { id: botId },
+      select: { status: true },
+    });
+    if (!bot) return res.status(404).json({ error: 'Bot no encontrado' });
+    res.set('Cache-Control', 'no-store');
+    res.json({ status: bot.status });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // Descargar archivo del bot (MQL4 o MQL5 según query param ?format=mq4|mq5)
 router.get('/:botId/download', authenticateToken, async (req: AuthRequest, res: Response) => {
   try {
@@ -21,6 +38,7 @@ router.get('/:botId/download', authenticateToken, async (req: AuthRequest, res: 
     }
 
     const botData = {
+      id: bot.id,
       name: bot.name,
       description: bot.description,
       strategy: bot.strategy,
