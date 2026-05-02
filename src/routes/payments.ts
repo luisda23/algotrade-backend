@@ -48,8 +48,8 @@ router.post('/checkout', authenticateToken, async (req: AuthRequest, res: Respon
         },
       ],
       mode: 'payment',
-      success_url: `${process.env.FRONTEND_URL}/index.html?payment=success&session={CHECKOUT_SESSION_ID}`,
-      cancel_url: `${process.env.FRONTEND_URL}/index.html?payment=cancel`,
+      success_url: `${process.env.FRONTEND_URL}/app?payment=success&session={CHECKOUT_SESSION_ID}`,
+      cancel_url: `${process.env.FRONTEND_URL}/app?payment=cancel`,
       customer_email: user.email,
       metadata: {
         userId: req.userId || '',
@@ -96,8 +96,8 @@ router.post('/checkout-custom', authenticateToken, async (req: AuthRequest, res:
         },
       ],
       mode: 'payment',
-      success_url: `${process.env.FRONTEND_URL}/index.html?payment=success&type=custom&session={CHECKOUT_SESSION_ID}`,
-      cancel_url: `${process.env.FRONTEND_URL}/index.html?payment=cancel`,
+      success_url: `${process.env.FRONTEND_URL}/app?payment=success&type=custom&session={CHECKOUT_SESSION_ID}`,
+      cancel_url: `${process.env.FRONTEND_URL}/app?payment=cancel`,
       customer_email: user.email,
       metadata: {
         userId: req.userId || '',
