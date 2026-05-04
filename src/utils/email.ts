@@ -1,37 +1,24 @@
-import nodemailer from 'nodemailer';
+import { Resend } from 'resend';
 
-// Configuración SMTP — variables de entorno requeridas:
-//   SMTP_HOST   (ej. smtp.hostinger.com)
-//   SMTP_PORT   (465 SSL o 587 STARTTLS)
-//   SMTP_USER   (ej. noreply@yudbot.com)
-//   SMTP_PASS   (la contraseña de la cuenta de email)
-//   SMTP_FROM   (opcional, lo que aparece como remitente — por defecto SMTP_USER)
-let cachedTransporter: nodemailer.Transporter | null = null;
+// Variables de entorno requeridas:
+//   RESEND_API_KEY  → de https://resend.com/api-keys
+//   EMAIL_FROM      → opcional; por defecto onboarding@resend.dev (sin dominio verificado).
+//                     Una vez verifiques yudbot.com en Resend, ponlo a:
+//                     "Yudbot <noreply@yudbot.com>"
 
-function getTransporter() {
-  if (cachedTransporter) return cachedTransporter;
-  const host = process.env.SMTP_HOST;
-  const port = parseInt(process.env.SMTP_PORT || '465', 10);
-  const user = process.env.SMTP_USER;
-  const pass = process.env.SMTP_PASS;
-
-  if (!host || !user || !pass) {
-    throw new Error('SMTP env vars no configuradas: SMTP_HOST, SMTP_USER, SMTP_PASS');
-  }
-
-  cachedTransporter = nodemailer.createTransport({
-    host,
-    port,
-    secure: port === 465, // true para 465 SSL, false para 587 STARTTLS
-    auth: { user, pass },
-  });
-  return cachedTransporter;
+let cached: Resend | null = null;
+function getClient(): Resend {
+  if (cached) return cached;
+  const key = process.env.RESEND_API_KEY;
+  if (!key) throw new Error('RESEND_API_KEY no configurada');
+  cached = new Resend(key);
+  return cached;
 }
 
-const FROM = process.env.SMTP_FROM || `Yudbot <${process.env.SMTP_USER}>`;
+const FROM = process.env.EMAIL_FROM || 'Yudbot <onboarding@resend.dev>';
 
 export async function sendVerificationEmail(to: string, name: string, code: string): Promise<void> {
-  const transporter = getTransporter();
+  const client = getClient();
 
   const html = `<!DOCTYPE html>
 <html>
@@ -68,16 +55,19 @@ Caduca en 15 minutos. Si no creaste esta cuenta, ignora este correo.
 
 — Yudbot`;
 
-  await transporter.sendMail({
+  const { error } = await client.emails.send({
     from: FROM,
     to,
     subject: `Tu código Yudbot: ${code}`,
     text,
     html,
   });
+
+  if (error) {
+    throw new Error(`Resend error: ${error.message || JSON.stringify(error)}`);
+  }
 }
 
 export function generateVerificationCode(): string {
-  // 6 dígitos, evita liderar con 0 para que se lean siempre 6
   return String(Math.floor(100000 + Math.random() * 900000));
 }
