@@ -61,7 +61,7 @@ router.post('/signup', async (req: Request, res: Response) => {
         password: hashedPassword,
         name,
         referredBy: referralCode || null,
-        emailVerified: true,  // Sin verificación previa: la MFA en login prueba ownership
+        emailVerified: false,  // Se verifica en el primer login con un código
       },
     });
 
@@ -72,21 +72,10 @@ router.post('/signup', async (req: Request, res: Response) => {
       console.error('Welcome email send error:', mailErr);
     }
 
-    const token = jwt.sign(
-      { userId: newUser.id, email: newUser.email },
-      JWT_SECRET,
-      { expiresIn: process.env.JWT_EXPIRATION || '7d' } as any
-    );
-
+    // No emitimos token de sesión: el usuario debe ir a Iniciar sesión donde se le pedirá verificar el email
     res.status(201).json({
-      message: 'Usuario creado exitosamente',
-      user: {
-        id: newUser.id,
-        email: newUser.email,
-        name: newUser.name,
-        emailVerified: newUser.emailVerified,
-      },
-      token,
+      message: 'Cuenta creada. Inicia sesión para verificar tu email.',
+      requiresLogin: true,
     });
   } catch (error) {
     console.error(error);
@@ -114,40 +103,53 @@ router.post('/login', async (req: Request, res: Response) => {
       return res.status(401).json({ error: 'Credenciales inválidas' });
     }
 
-    // Generar código de 6 dígitos para MFA
-    const code = generateVerificationCode();
-    const codeHash = await bcrypt.hash(code, 10);
-    const expires = new Date(Date.now() + 10 * 60 * 1000); // 10 min
+    // Si el email aún no está verificado, mandamos código y pedimos verificación
+    // (esto solo ocurre en el primer login tras crear la cuenta)
+    if (!user.emailVerified) {
+      const code = generateVerificationCode();
+      const codeHash = await bcrypt.hash(code, 10);
+      const expires = new Date(Date.now() + 15 * 60 * 1000);
 
-    await prisma.user.update({
-      where: { id: user.id },
-      data: {
-        verificationCode: codeHash,
-        verificationCodeExpires: expires,
-        verificationAttempts: 0,
-      },
-    });
+      await prisma.user.update({
+        where: { id: user.id },
+        data: {
+          verificationCode: codeHash,
+          verificationCodeExpires: expires,
+          verificationAttempts: 0,
+        },
+      });
 
-    try {
-      await sendLoginCodeEmail(user.email, user.name, code);
-    } catch (mailErr: any) {
-      console.error('Login code email error:', mailErr);
-      return res.status(500).json({ error: 'No se pudo enviar el código. Intenta de nuevo.' });
+      try {
+        await sendLoginCodeEmail(user.email, user.name, code);
+      } catch (mailErr: any) {
+        console.error('Login code email error:', mailErr);
+        return res.status(500).json({ error: 'No se pudo enviar el código. Intenta de nuevo.' });
+      }
+
+      const pendingToken = jwt.sign(
+        { type: 'pending-login', userId: user.id },
+        JWT_SECRET,
+        { expiresIn: '15m' }
+      );
+
+      return res.json({
+        requiresMFA: true,
+        pendingToken,
+        emailHint: maskEmail(user.email),
+      });
     }
 
-    // Pending token: solo identifica al usuario para el endpoint /verify-login.
-    // Caduca en 10 min y NO da acceso a ningún endpoint protegido.
-    const pendingToken = jwt.sign(
-      { type: 'pending-login', userId: user.id },
+    // Email ya verificado: login normal, token directo
+    const token = jwt.sign(
+      { userId: user.id, email: user.email },
       JWT_SECRET,
-      { expiresIn: '10m' }
+      { expiresIn: process.env.JWT_EXPIRATION || '7d' } as any
     );
 
     res.json({
-      requiresMFA: true,
-      pendingToken,
-      // Pista del email para mostrar en la UI sin filtrar el completo
-      emailHint: maskEmail(user.email),
+      message: 'Login exitoso',
+      user: { id: user.id, email: user.email, name: user.name, emailVerified: user.emailVerified },
+      token,
     });
   } catch (error) {
     console.error(error);
@@ -365,10 +367,11 @@ router.post('/verify-login', async (req: Request, res: Response) => {
       return res.status(401).json({ error: 'Código incorrecto' });
     }
 
-    // Limpia el código y emite el token real de sesión
-    await prisma.user.update({
+    // Marca el email como verificado, limpia el código y emite el token real
+    const updated = await prisma.user.update({
       where: { id: user.id },
       data: {
+        emailVerified: true,
         verificationCode: null,
         verificationCodeExpires: null,
         verificationAttempts: 0,
@@ -376,14 +379,14 @@ router.post('/verify-login', async (req: Request, res: Response) => {
     });
 
     const token = jwt.sign(
-      { userId: user.id, email: user.email },
+      { userId: updated.id, email: updated.email },
       JWT_SECRET,
       { expiresIn: process.env.JWT_EXPIRATION || '7d' } as any
     );
 
     res.json({
       message: 'Login completado',
-      user: { id: user.id, email: user.email, name: user.name, emailVerified: user.emailVerified },
+      user: { id: updated.id, email: updated.email, name: updated.name, emailVerified: updated.emailVerified },
       token,
     });
   } catch (error: any) {
