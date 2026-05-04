@@ -51,11 +51,11 @@ export function generateMQL4(bot: {
 
   return `//+------------------------------------------------------------------+
 //|                                              ${sanitizeName}.mq4 |
-//|                              Generado por AlgoTrade · ${generatedDate} |
-//|                                          https://algotrade.app |
+//|                              Generado por YudBot · ${generatedDate} |
+//|                                          https://yudbot.com |
 //+------------------------------------------------------------------+
-#property copyright "AlgoTrade"
-#property link      "https://algotrade.app"
+#property copyright "YudBot"
+#property link      "https://yudbot.com"
 #property version   "1.00"
 #property strict
 #property description "${bot.description || bot.name}"
@@ -93,7 +93,7 @@ int OnInit()
 {
    Print("═══════════════════════════════════════");
    Print("  ${bot.name}");
-   Print("  Generado por AlgoTrade · ${generatedDate}");
+   Print("  Generado por YudBot · ${generatedDate}");
    Print("  Estrategia: ${strategyDescriptions[strategy] || strategy}");
    Print("═══════════════════════════════════════");
 
@@ -220,7 +220,7 @@ ${generateStrategyLogic(strategy, indicators)}
 }
 
 //+------------------------------------------------------------------+
-//| END OF FILE — Generado por AlgoTrade                             |
+//| END OF FILE — Generado por YudBot                             |
 //+------------------------------------------------------------------+
 `;
 }
