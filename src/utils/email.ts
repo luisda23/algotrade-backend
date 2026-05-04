@@ -12,7 +12,7 @@ function getClient(): Resend {
 const FROM = process.env.EMAIL_FROM || 'Yudbot <onboarding@resend.dev>';
 // URL pública del logo para emails. Gmail no renderiza inline SVG, así que
 // debemos hospedar el PNG. Por defecto en el dominio del frontend.
-const LOGO_URL = process.env.EMAIL_LOGO_URL || 'https://algotrade-beige.vercel.app/logo-email.png';
+const LOGO_URL = process.env.EMAIL_LOGO_URL || 'https://algotrade-beige.vercel.app/logo-black.png';
 
 // ───────── Plantilla base reutilizable ─────────
 function baseTemplate(opts: {
