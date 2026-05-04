@@ -126,4 +126,81 @@ router.get('/me', authenticateToken, async (req: AuthRequest, res: Response) => 
   }
 });
 
+// Actualizar perfil (nombre y/o email)
+router.put('/me', authenticateToken, async (req: AuthRequest, res: Response) => {
+  try {
+    const raw = req.body || {};
+    const data: any = {};
+
+    if (typeof raw.name === 'string') {
+      const name = raw.name.trim();
+      if (name.length < 2 || name.length > 80) {
+        return res.status(400).json({ error: 'Nombre inválido (2-80 caracteres)' });
+      }
+      data.name = name;
+    }
+
+    if (typeof raw.email === 'string') {
+      const email = raw.email.trim().toLowerCase();
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+        return res.status(400).json({ error: 'Email no válido' });
+      }
+      // Verificar que no esté en uso por otro usuario
+      const existing = await prisma.user.findUnique({ where: { email } });
+      if (existing && existing.id !== req.userId) {
+        return res.status(409).json({ error: 'Ese email ya está en uso' });
+      }
+      data.email = email;
+    }
+
+    if (Object.keys(data).length === 0) {
+      return res.status(400).json({ error: 'Nada que actualizar' });
+    }
+
+    const user = await prisma.user.update({
+      where: { id: req.userId },
+      data,
+      select: { id: true, email: true, name: true, createdAt: true },
+    });
+
+    res.json({ message: 'Perfil actualizado', user });
+  } catch (error: any) {
+    console.error(error);
+    res.status(500).json({ error: 'Error en el servidor' });
+  }
+});
+
+// Cambiar contraseña
+router.post('/change-password', authenticateToken, async (req: AuthRequest, res: Response) => {
+  try {
+    const { currentPassword, newPassword } = req.body || {};
+    if (typeof currentPassword !== 'string' || typeof newPassword !== 'string') {
+      return res.status(400).json({ error: 'Contraseña actual y nueva son requeridas' });
+    }
+    if (newPassword.length < 8) {
+      return res.status(400).json({ error: 'La nueva contraseña debe tener al menos 8 caracteres' });
+    }
+    if (!/[A-Z]/.test(newPassword) || !/\d/.test(newPassword)) {
+      return res.status(400).json({ error: 'La nueva contraseña necesita una mayúscula y un número' });
+    }
+    if (currentPassword === newPassword) {
+      return res.status(400).json({ error: 'La nueva contraseña debe ser distinta de la actual' });
+    }
+
+    const user = await prisma.user.findUnique({ where: { id: req.userId } });
+    if (!user) return res.status(404).json({ error: 'Usuario no encontrado' });
+
+    const match = await bcrypt.compare(currentPassword, user.password);
+    if (!match) return res.status(401).json({ error: 'La contraseña actual no es correcta' });
+
+    const hashed = await bcrypt.hash(newPassword, 10);
+    await prisma.user.update({ where: { id: req.userId }, data: { password: hashed } });
+
+    res.json({ message: 'Contraseña actualizada' });
+  } catch (error: any) {
+    console.error(error);
+    res.status(500).json({ error: 'Error en el servidor' });
+  }
+});
+
 export default router;
