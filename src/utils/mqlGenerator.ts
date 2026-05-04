@@ -70,12 +70,14 @@ export function generateMQL5(bot: {
   const selectedEventIds = (news.events && Array.isArray(news.events))
     ? news.events
     : Object.keys(NEWS_EVENT_PATTERNS); // si no llega array, asumimos todos
-  // Construye la lista única de patrones seleccionados, separada por "||"
+  // Si el usuario marcó "Ninguno" (events=[]), su intent es NO filtrar por eventos.
+  // Desactivamos el filtro completo en lugar de pausar en todos (que sería lo opuesto).
+  const effectiveNewsEnabled = newsEnabled && selectedEventIds.length > 0;
   const newsPatternsStr = selectedEventIds
     .map(id => NEWS_EVENT_PATTERNS[id])
     .filter(Boolean)
     .join('||')
-    .replace(/"/g, '\\"'); // safety
+    .replace(/"/g, '\\"');
   const newsHasEventFilter = selectedEventIds.length > 0 && selectedEventIds.length < Object.keys(NEWS_EVENT_PATTERNS).length;
   const generatedDate = new Date().toISOString().split('T')[0];
 
@@ -129,7 +131,7 @@ input int      InpStartHour        = 8;                  // Hora inicio (UTC)
 input int      InpEndHour          = 22;                 // Hora fin (UTC)
 
 input group    "═══ FILTRO DE NOTICIAS ═══"
-input bool     InpFilterNews       = ${newsEnabled};                // Pausar bot durante noticias
+input bool     InpFilterNews       = ${effectiveNewsEnabled};       // Pausar bot durante noticias
 input int      InpNewsMinutesBefore = ${newsBefore};                // Minutos antes de la noticia
 input int      InpNewsMinutesAfter  = ${newsAfter};                 // Minutos después de la noticia
 input ENUM_CALENDAR_EVENT_IMPORTANCE InpNewsMinImpact = ${newsImpactMQL}; // Impacto mínimo a evitar

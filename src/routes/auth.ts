@@ -2,7 +2,7 @@ import { Router, Request, Response } from 'express';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import { prisma } from '../server';
-import { authenticateToken, AuthRequest } from '../middleware/auth';
+import { authenticateToken, AuthRequest, JWT_SECRET } from '../middleware/auth';
 
 const router = Router();
 
@@ -20,10 +20,23 @@ interface LoginBody {
 
 router.post('/signup', async (req: Request, res: Response) => {
   try {
-    const { email, password, name, referralCode }: SignupBody = req.body;
+    const raw: SignupBody = req.body || {};
+    const email = typeof raw.email === 'string' ? raw.email.trim().toLowerCase() : '';
+    const password = typeof raw.password === 'string' ? raw.password : '';
+    const name = typeof raw.name === 'string' ? raw.name.trim() : '';
+    const referralCode = typeof raw.referralCode === 'string' ? raw.referralCode.trim() : undefined;
 
     if (!email || !password || !name) {
       return res.status(400).json({ error: 'Email, contraseña y nombre requeridos' });
+    }
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      return res.status(400).json({ error: 'Email no válido' });
+    }
+    if (password.length < 6) {
+      return res.status(400).json({ error: 'La contraseña debe tener al menos 6 caracteres' });
+    }
+    if (name.length > 80) {
+      return res.status(400).json({ error: 'El nombre es demasiado largo' });
     }
 
     const existingUser = await prisma.user.findUnique({ where: { email } });
@@ -37,13 +50,13 @@ router.post('/signup', async (req: Request, res: Response) => {
         email,
         password: hashedPassword,
         name,
-        referredBy: referralCode,
+        referredBy: referralCode || null,
       },
     });
 
     const token = jwt.sign(
       { userId: newUser.id, email: newUser.email },
-      process.env.JWT_SECRET || 'secret',
+      JWT_SECRET,
       { expiresIn: process.env.JWT_EXPIRATION || '7d' } as any
     );
 
@@ -60,7 +73,9 @@ router.post('/signup', async (req: Request, res: Response) => {
 
 router.post('/login', async (req: Request, res: Response) => {
   try {
-    const { email, password }: LoginBody = req.body;
+    const raw: LoginBody = req.body || {};
+    const email = typeof raw.email === 'string' ? raw.email.trim().toLowerCase() : '';
+    const password = typeof raw.password === 'string' ? raw.password : '';
 
     if (!email || !password) {
       return res.status(400).json({ error: 'Email y contraseña requeridos' });
@@ -78,7 +93,7 @@ router.post('/login', async (req: Request, res: Response) => {
 
     const token = jwt.sign(
       { userId: user.id, email: user.email },
-      process.env.JWT_SECRET || 'secret',
+      JWT_SECRET,
       { expiresIn: process.env.JWT_EXPIRATION || '7d' } as any
     );
 

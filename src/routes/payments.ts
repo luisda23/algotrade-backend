@@ -115,11 +115,36 @@ router.post('/checkout-custom', authenticateToken, async (req: AuthRequest, res:
   }
 });
 
+// Validación + saneado del payload del wizard
+function sanitizeBotConfig(raw: any): { ok: true; data: any } | { ok: false; error: string } {
+  if (!raw || typeof raw !== 'object') return { ok: false, error: 'Configuración del bot requerida' };
+
+  const name = typeof raw.name === 'string' ? raw.name.trim() : '';
+  if (name.length === 0 || name.length > 60) {
+    return { ok: false, error: 'Nombre de bot inválido (1-60 caracteres)' };
+  }
+  const strategy = typeof raw.strategy === 'string' ? raw.strategy : '';
+  const allowedStrategies = ['scalping','swing','momentum','mean','breakout','grid','trend','dca','hedge','reversal'];
+  if (!allowedStrategies.includes(strategy)) {
+    return { ok: false, error: 'Estrategia no válida' };
+  }
+
+  const description = typeof raw.description === 'string' ? raw.description.slice(0, 200) : '';
+  const params = (raw.parameters && typeof raw.parameters === 'object') ? raw.parameters : {};
+
+  // Sanitizar parameters: solo dejar claves esperadas y valores básicos
+  const allowedKeys = ['avatar','market','pair','leverage','indicators','risk','news','funded'];
+  const cleanParams: any = {};
+  for (const k of allowedKeys) if (k in params) cleanParams[k] = params[k];
+
+  return { ok: true, data: { name, strategy, description, parameters: cleanParams } };
+}
+
 // Endpoint para verificar pago y crear bot custom
 router.post('/verify', authenticateToken, async (req: AuthRequest, res: Response) => {
   try {
     const { sessionId, botConfig } = req.body;
-    if (!sessionId) {
+    if (!sessionId || typeof sessionId !== 'string') {
       return res.status(400).json({ error: 'sessionId requerido' });
     }
 
@@ -137,19 +162,28 @@ router.post('/verify', authenticateToken, async (req: AuthRequest, res: Response
       return res.status(403).json({ error: 'Sesión no pertenece a este usuario' });
     }
 
-    // Crear el bot custom con la config del wizard
-    if (!botConfig) {
-      return res.status(400).json({ error: 'Configuración del bot requerida' });
+    // Idempotencia: si ya existe un bot creado con este sessionId, devolverlo
+    const existing = await prisma.bot.findFirst({
+      where: {
+        userId,
+        parameters: { path: ['stripeSessionId'], equals: sessionId } as any,
+      },
+    });
+    if (existing) {
+      return res.json({ message: 'Pago ya verificado', bot: existing });
     }
+
+    // Validar y sanear la config
+    const result = sanitizeBotConfig(botConfig);
+    if (!result.ok) return res.status(400).json({ error: result.error });
 
     const bot = await prisma.bot.create({
       data: {
         userId,
-        name: botConfig.name,
-        description: botConfig.description || '',
-        strategy: botConfig.strategy,
-        parameters: botConfig.parameters || {},
-        status: 'active',
+        name: result.data.name,
+        description: result.data.description,
+        strategy: result.data.strategy,
+        parameters: { ...result.data.parameters, stripeSessionId: sessionId },
       },
     });
 

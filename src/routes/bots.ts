@@ -111,7 +111,7 @@ router.get('/:botId', authenticateToken, async (req: AuthRequest, res: Response)
 router.put('/:botId', authenticateToken, async (req: AuthRequest, res: Response) => {
   try {
     const { botId } = req.params;
-    const { name, description, status, parameters } = req.body;
+    const { name, description, parameters } = req.body;
 
     const bot = await prisma.bot.findUnique({ where: { id: botId } });
     if (!bot || bot.userId !== req.userId) {
@@ -121,10 +121,9 @@ router.put('/:botId', authenticateToken, async (req: AuthRequest, res: Response)
     const updatedBot = await prisma.bot.update({
       where: { id: botId },
       data: {
-        ...(name && { name }),
-        ...(description && { description }),
-        ...(status && { status }),
-        ...(parameters && { parameters }),
+        ...(typeof name === 'string' && name.trim() && { name: name.trim().slice(0, 60) }),
+        ...(typeof description === 'string' && { description: description.slice(0, 200) }),
+        ...(parameters && typeof parameters === 'object' && { parameters }),
       },
     });
 
