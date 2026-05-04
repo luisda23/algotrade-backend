@@ -139,6 +139,58 @@ Caduca en 10 minutos. Si no estás intentando acceder a tu cuenta, ignora este c
   }
 }
 
+// ───────── EMAIL: RESET DE CONTRASEÑA ─────────
+export async function sendPasswordResetEmail(to: string, name: string, resetUrl: string): Promise<void> {
+  const client = getClient();
+
+  const html = baseTemplate({
+    preheader: 'Restablece tu contraseña de YudBot',
+    title: 'Restablece tu contraseña',
+    intro: `Hola ${name || ''},<br/>Hemos recibido una solicitud para restablecer la contraseña de tu cuenta de YudBot. Haz click en el botón para crear una nueva:`,
+    block: `
+      <div style="text-align:center;margin:24px 0">
+        <a href="${resetUrl}" style="display:inline-block;background:#000;color:#fff;text-decoration:none;padding:14px 32px;border-radius:10px;font-weight:600;font-size:14px;letter-spacing:0.2px">Restablecer contraseña →</a>
+      </div>
+      <p style="font-size:13px;color:#666;line-height:1.55;margin:16px 0 0">El enlace caduca en 1 hora y solo se puede usar una vez.</p>
+      <p style="font-size:13px;color:#666;line-height:1.55;margin:8px 0 0">Si el botón no funciona, copia y pega este enlace en tu navegador:</p>
+      <p style="font-size:12px;color:#888;word-break:break-all;background:#f5f5f5;padding:10px 12px;border-radius:8px;margin:8px 0 0;font-family:'SF Mono','Menlo','Consolas',monospace">${resetUrl}</p>
+      <div style="background:#fff8e6;border:1px solid #f5d97a;border-radius:10px;padding:14px 16px;font-size:13px;color:#7a5a00;line-height:1.5;margin-top:18px">
+        ⚠️ Si no has solicitado este restablecimiento, ignora este correo. Tu contraseña actual seguirá siendo válida.
+      </div>
+    `,
+  });
+
+  const text = `Hola ${name || ''},
+
+Has solicitado restablecer la contraseña de tu cuenta de YudBot.
+
+Abre este enlace para crear una nueva contraseña (caduca en 1 hora):
+
+${resetUrl}
+
+Si no has pedido este cambio, ignora este correo. Tu contraseña actual seguirá siendo válida.
+
+— YudBot`;
+
+  const { error } = await client.emails.send({
+    from: FROM,
+    to,
+    subject: 'Restablece tu contraseña de YudBot',
+    text,
+    html,
+  });
+
+  if (error) {
+    throw new Error(`Resend error: ${error.message || JSON.stringify(error)}`);
+  }
+}
+
+export function generateResetToken(): string {
+  // 32 bytes aleatorios = 64 chars hex, URL-safe, espacio ~10^77 (intratable por fuerza bruta)
+  const bytes = require('crypto').randomBytes(32);
+  return bytes.toString('hex');
+}
+
 // ───────── EMAIL: CONFIRMAR CAMBIO DE EMAIL ─────────
 export async function sendEmailChangeCode(to: string, name: string, code: string, currentEmail: string): Promise<void> {
   const client = getClient();

@@ -20,6 +20,8 @@ model User {
   verificationCodeExpires DateTime?
   verificationAttempts    Int       @default(0)
   pendingEmail            String?   // Email nuevo en espera de verificación tras un cambio
+  resetToken              String?   // Hash bcrypt del token de recuperación de contraseña
+  resetTokenExpires       DateTime?
 
   bots          Bot[]
   brokers       BrokerConnection[]

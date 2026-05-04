@@ -3,7 +3,7 @@ import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import { prisma } from '../server';
 import { authenticateToken, AuthRequest, JWT_SECRET } from '../middleware/auth';
-import { sendWelcomeEmail, sendLoginCodeEmail, sendEmailChangeCode, generateVerificationCode } from '../utils/email';
+import { sendWelcomeEmail, sendLoginCodeEmail, sendEmailChangeCode, sendPasswordResetEmail, generateVerificationCode, generateResetToken } from '../utils/email';
 
 const router = Router();
 
@@ -444,6 +444,111 @@ router.post('/resend-login-code', async (req: Request, res: Response) => {
     }
 
     res.json({ message: 'Código enviado' });
+  } catch (error: any) {
+    console.error(error);
+    res.status(500).json({ error: 'Error en el servidor' });
+  }
+});
+
+// Solicitar reset de contraseña — envía email con enlace
+router.post('/forgot-password', async (req: Request, res: Response) => {
+  // Respuesta SIEMPRE igual (haya o no usuario) para evitar enumeración de emails
+  const SAFE_OK = { message: 'Si ese email está registrado, te llegará un enlace en breve.' };
+
+  try {
+    const email = typeof req.body?.email === 'string' ? req.body.email.trim().toLowerCase() : '';
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      return res.json(SAFE_OK);
+    }
+
+    const user = await prisma.user.findUnique({ where: { email } });
+    if (!user) return res.json(SAFE_OK);
+
+    // Rate limit: si hay un token vivo emitido hace < 60s, no reenviamos
+    if (user.resetTokenExpires) {
+      const issuedAt = user.resetTokenExpires.getTime() - 60 * 60 * 1000;
+      if (Date.now() - issuedAt < 60 * 1000) {
+        return res.json(SAFE_OK);
+      }
+    }
+
+    const token = generateResetToken();
+    const tokenHash = await bcrypt.hash(token, 10);
+    const expires = new Date(Date.now() + 60 * 60 * 1000); // 1 hora
+
+    await prisma.user.update({
+      where: { id: user.id },
+      data: { resetToken: tokenHash, resetTokenExpires: expires },
+    });
+
+    const frontendBase = process.env.FRONTEND_URL || 'https://yudbot.com';
+    const resetUrl = `${frontendBase}/app?reset=${token}&id=${user.id}`;
+
+    try {
+      await sendPasswordResetEmail(user.email, user.name, resetUrl);
+    } catch (mailErr: any) {
+      console.error('Reset email send error:', mailErr);
+      // Limpiar token para no dejar estado inconsistente
+      await prisma.user.update({
+        where: { id: user.id },
+        data: { resetToken: null, resetTokenExpires: null },
+      });
+      return res.status(500).json({ error: 'No se pudo enviar el email' });
+    }
+
+    return res.json(SAFE_OK);
+  } catch (error: any) {
+    console.error(error);
+    // Mismo mensaje seguro
+    return res.json(SAFE_OK);
+  }
+});
+
+// Aplicar nueva contraseña usando el token del email
+router.post('/reset-password', async (req: Request, res: Response) => {
+  try {
+    const userId = typeof req.body?.userId === 'string' ? req.body.userId : '';
+    const token = typeof req.body?.token === 'string' ? req.body.token : '';
+    const newPassword = typeof req.body?.newPassword === 'string' ? req.body.newPassword : '';
+
+    if (!userId || !token) {
+      return res.status(400).json({ error: 'Enlace inválido' });
+    }
+    if (newPassword.length < 8) {
+      return res.status(400).json({ error: 'La contraseña debe tener al menos 8 caracteres' });
+    }
+    if (!/[A-Z]/.test(newPassword) || !/\d/.test(newPassword)) {
+      return res.status(400).json({ error: 'La contraseña necesita una mayúscula y un número' });
+    }
+
+    const user = await prisma.user.findUnique({ where: { id: userId } });
+    if (!user || !user.resetToken || !user.resetTokenExpires) {
+      return res.status(400).json({ error: 'Enlace inválido o ya usado. Pide uno nuevo.' });
+    }
+    if (user.resetTokenExpires.getTime() < Date.now()) {
+      return res.status(400).json({ error: 'El enlace ha caducado. Pide uno nuevo.' });
+    }
+
+    const match = await bcrypt.compare(token, user.resetToken);
+    if (!match) {
+      return res.status(400).json({ error: 'Enlace inválido o ya usado. Pide uno nuevo.' });
+    }
+
+    const hashed = await bcrypt.hash(newPassword, 10);
+    await prisma.user.update({
+      where: { id: user.id },
+      data: {
+        password: hashed,
+        resetToken: null,
+        resetTokenExpires: null,
+        // Invalidar también cualquier MFA pendiente para forzar login limpio
+        verificationCode: null,
+        verificationCodeExpires: null,
+        verificationAttempts: 0,
+      },
+    });
+
+    res.json({ message: 'Contraseña restablecida. Ya puedes iniciar sesión.' });
   } catch (error: any) {
     console.error(error);
     res.status(500).json({ error: 'Error en el servidor' });
