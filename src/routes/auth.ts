@@ -3,7 +3,7 @@ import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import { prisma } from '../server';
 import { authenticateToken, AuthRequest, JWT_SECRET } from '../middleware/auth';
-import { sendWelcomeEmail, sendLoginCodeEmail, generateVerificationCode } from '../utils/email';
+import { sendWelcomeEmail, sendLoginCodeEmail, sendEmailChangeCode, generateVerificationCode } from '../utils/email';
 
 const router = Router();
 
@@ -173,44 +173,149 @@ router.get('/me', authenticateToken, async (req: AuthRequest, res: Response) => 
   }
 });
 
-// Actualizar perfil (nombre y/o email)
+// Actualizar perfil. Solo el nombre cambia inmediatamente; el email exige
+// confirmar con un código enviado al NUEVO email antes de aplicarse.
 router.put('/me', authenticateToken, async (req: AuthRequest, res: Response) => {
   try {
     const raw = req.body || {};
-    const data: any = {};
 
+    // Nombre: cambio directo si llega
+    let nameUpdated = false;
     if (typeof raw.name === 'string') {
       const name = raw.name.trim();
       if (name.length < 2 || name.length > 80) {
         return res.status(400).json({ error: 'Nombre inválido (2-80 caracteres)' });
       }
-      data.name = name;
+      await prisma.user.update({ where: { id: req.userId }, data: { name } });
+      nameUpdated = true;
     }
 
+    // Email: NO se cambia aún, se envía código al nuevo email para confirmar
+    let emailChangeRequested = false;
+    let emailHint: string | undefined;
     if (typeof raw.email === 'string') {
-      const email = raw.email.trim().toLowerCase();
-      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      const newEmail = raw.email.trim().toLowerCase();
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(newEmail)) {
         return res.status(400).json({ error: 'Email no válido' });
       }
-      // Verificar que no esté en uso por otro usuario
-      const existing = await prisma.user.findUnique({ where: { email } });
-      if (existing && existing.id !== req.userId) {
-        return res.status(409).json({ error: 'Ese email ya está en uso' });
+
+      const me = await prisma.user.findUnique({ where: { id: req.userId } });
+      if (!me) return res.status(404).json({ error: 'Usuario no encontrado' });
+
+      // Si el usuario "cambia" al mismo que ya tiene, no hacemos nada
+      if (newEmail === me.email) {
+        // No es error pero no toca el email
+      } else {
+        const existing = await prisma.user.findUnique({ where: { email: newEmail } });
+        if (existing && existing.id !== req.userId) {
+          return res.status(409).json({ error: 'Ese email ya está en uso' });
+        }
+
+        const code = generateVerificationCode();
+        const codeHash = await bcrypt.hash(code, 10);
+        const expires = new Date(Date.now() + 15 * 60 * 1000);
+
+        await prisma.user.update({
+          where: { id: req.userId },
+          data: {
+            pendingEmail: newEmail,
+            verificationCode: codeHash,
+            verificationCodeExpires: expires,
+            verificationAttempts: 0,
+          },
+        });
+
+        try {
+          await sendEmailChangeCode(newEmail, me.name, code, me.email);
+        } catch (mailErr: any) {
+          console.error('Email change code send error:', mailErr);
+          // Limpiamos para no dejar estado inconsistente
+          await prisma.user.update({
+            where: { id: req.userId },
+            data: { pendingEmail: null, verificationCode: null, verificationCodeExpires: null },
+          });
+          return res.status(500).json({ error: 'No se pudo enviar el código al nuevo email' });
+        }
+
+        emailChangeRequested = true;
+        emailHint = maskEmail(newEmail);
       }
-      data.email = email;
     }
 
-    if (Object.keys(data).length === 0) {
+    if (!nameUpdated && !emailChangeRequested) {
       return res.status(400).json({ error: 'Nada que actualizar' });
     }
 
-    const user = await prisma.user.update({
+    const user = await prisma.user.findUnique({
       where: { id: req.userId },
-      data,
       select: { id: true, email: true, name: true, emailVerified: true, createdAt: true },
     });
 
-    res.json({ message: 'Perfil actualizado', user });
+    res.json({
+      message: emailChangeRequested ? 'Te hemos enviado un código al nuevo email' : 'Perfil actualizado',
+      user,
+      emailChangeRequested,
+      emailHint,
+    });
+  } catch (error: any) {
+    console.error(error);
+    res.status(500).json({ error: 'Error en el servidor' });
+  }
+});
+
+// Confirmar cambio de email con el código enviado al nuevo
+router.post('/verify-email-change', authenticateToken, async (req: AuthRequest, res: Response) => {
+  try {
+    const code = typeof req.body?.code === 'string' ? req.body.code.trim() : '';
+    if (!/^\d{6}$/.test(code)) {
+      return res.status(400).json({ error: 'Código inválido (6 dígitos)' });
+    }
+
+    const user = await prisma.user.findUnique({ where: { id: req.userId } });
+    if (!user) return res.status(404).json({ error: 'Usuario no encontrado' });
+
+    if (!user.pendingEmail || !user.verificationCode || !user.verificationCodeExpires) {
+      return res.status(400).json({ error: 'No hay cambio de email pendiente' });
+    }
+    if (user.verificationCodeExpires.getTime() < Date.now()) {
+      return res.status(400).json({ error: 'El código ha caducado. Vuelve a pedir el cambio.' });
+    }
+    if ((user.verificationAttempts || 0) >= 5) {
+      return res.status(429).json({ error: 'Demasiados intentos. Vuelve a pedir el cambio.' });
+    }
+
+    const match = await bcrypt.compare(code, user.verificationCode);
+    if (!match) {
+      await prisma.user.update({
+        where: { id: user.id },
+        data: { verificationAttempts: { increment: 1 } },
+      });
+      return res.status(401).json({ error: 'Código incorrecto' });
+    }
+
+    // Verificar de nuevo que el email no haya sido tomado mientras tanto
+    const taken = await prisma.user.findUnique({ where: { email: user.pendingEmail } });
+    if (taken && taken.id !== user.id) {
+      await prisma.user.update({
+        where: { id: user.id },
+        data: { pendingEmail: null, verificationCode: null, verificationCodeExpires: null, verificationAttempts: 0 },
+      });
+      return res.status(409).json({ error: 'Ese email se ha registrado mientras esperabas. Prueba con otro.' });
+    }
+
+    const updated = await prisma.user.update({
+      where: { id: user.id },
+      data: {
+        email: user.pendingEmail,
+        pendingEmail: null,
+        verificationCode: null,
+        verificationCodeExpires: null,
+        verificationAttempts: 0,
+      },
+      select: { id: true, email: true, name: true, emailVerified: true, createdAt: true },
+    });
+
+    res.json({ message: 'Email actualizado', user: updated });
   } catch (error: any) {
     console.error(error);
     res.status(500).json({ error: 'Error en el servidor' });

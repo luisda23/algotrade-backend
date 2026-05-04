@@ -136,6 +136,52 @@ Caduca en 10 minutos. Si no estás intentando acceder a tu cuenta, ignora este c
   }
 }
 
+// ───────── EMAIL: CONFIRMAR CAMBIO DE EMAIL ─────────
+export async function sendEmailChangeCode(to: string, name: string, code: string, currentEmail: string): Promise<void> {
+  const client = getClient();
+
+  const html = baseTemplate({
+    preheader: `Confirma tu nuevo email en Yudbot: código ${code}`,
+    title: 'Confirma tu nuevo email',
+    intro: `Hola ${name || ''},<br/>Has solicitado cambiar el email de tu cuenta de Yudbot a <strong style="color:#000">${to}</strong>. Para confirmarlo, introduce este código:`,
+    block: `
+      <div style="background:#f5f5f5;border-radius:12px;padding:24px;text-align:center;margin:0 0 20px">
+        <div style="font-family:'SF Mono','Menlo','Consolas',monospace;font-size:36px;font-weight:700;letter-spacing:14px;color:#000">${code}</div>
+      </div>
+      <div style="background:#fff8e6;border:1px solid #f5d97a;border-radius:10px;padding:14px 16px;font-size:13px;color:#7a5a00;line-height:1.5">
+        ⚠️ Si no has pedido este cambio, ignora este correo. Tu email actual <strong>${currentEmail}</strong> seguirá activo y nadie tendrá acceso a tu cuenta.
+      </div>
+      <p style="font-size:13px;color:#888;margin:14px 0 0">El código caduca en 15 minutos.</p>
+    `,
+  });
+
+  const text = `Hola ${name || ''},
+
+Has solicitado cambiar el email de tu cuenta de Yudbot a ${to}.
+
+Tu código de confirmación es:
+
+  ${code}
+
+Caduca en 15 minutos.
+
+Si no has pedido este cambio, ignora este correo. Tu email actual (${currentEmail}) seguirá activo.
+
+— Yudbot`;
+
+  const { error } = await client.emails.send({
+    from: FROM,
+    to,
+    subject: `Yudbot: confirma tu nuevo email ${code}`,
+    text,
+    html,
+  });
+
+  if (error) {
+    throw new Error(`Resend error: ${error.message || JSON.stringify(error)}`);
+  }
+}
+
 export function generateVerificationCode(): string {
   return String(Math.floor(100000 + Math.random() * 900000));
 }
