@@ -38,7 +38,7 @@ function baseTemplate(opts: {
       ${opts.outro ? `<p style="font-size:14px;line-height:1.55;color:#666;margin:24px 0 0">${opts.outro}</p>` : ''}
     </div>
     <div style="text-align:center;margin-top:20px;font-size:12px;color:#888;line-height:1.6">
-      ${opts.footer || 'Yudbot · Generador de bots para MetaTrader 4 y 5<br/>No respondas a este correo. Para soporte: <a href="mailto:hola@yudbot.com" style="color:#000;text-decoration:underline">hola@yudbot.com</a>'}
+      ${opts.footer || 'Yudbot · Generador de bots para MetaTrader 4 y 5<br/>No respondas a este correo. Para soporte: <a href="mailto:support@yudbot.com" style="color:#000;text-decoration:underline">support@yudbot.com</a>'}
     </div>
   </div>
 </body>
