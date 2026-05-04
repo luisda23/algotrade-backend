@@ -116,28 +116,33 @@ router.post('/checkout-custom', authenticateToken, async (req: AuthRequest, res:
 });
 
 // Validación + saneado del payload del wizard
-function sanitizeBotConfig(raw: any): { ok: true; data: any } | { ok: false; error: string } {
-  if (!raw || typeof raw !== 'object') return { ok: false, error: 'Configuración del bot requerida' };
+interface SanitizedBot {
+  name: string;
+  strategy: string;
+  description: string;
+  parameters: Record<string, any>;
+}
+function sanitizeBotConfig(raw: any): { error: string; data: null } | { error: null; data: SanitizedBot } {
+  if (!raw || typeof raw !== 'object') return { error: 'Configuración del bot requerida', data: null };
 
   const name = typeof raw.name === 'string' ? raw.name.trim() : '';
   if (name.length === 0 || name.length > 60) {
-    return { ok: false, error: 'Nombre de bot inválido (1-60 caracteres)' };
+    return { error: 'Nombre de bot inválido (1-60 caracteres)', data: null };
   }
   const strategy = typeof raw.strategy === 'string' ? raw.strategy : '';
   const allowedStrategies = ['scalping','swing','momentum','mean','breakout','grid','trend','dca','hedge','reversal'];
   if (!allowedStrategies.includes(strategy)) {
-    return { ok: false, error: 'Estrategia no válida' };
+    return { error: 'Estrategia no válida', data: null };
   }
 
   const description = typeof raw.description === 'string' ? raw.description.slice(0, 200) : '';
   const params = (raw.parameters && typeof raw.parameters === 'object') ? raw.parameters : {};
 
-  // Sanitizar parameters: solo dejar claves esperadas y valores básicos
   const allowedKeys = ['avatar','market','pair','leverage','indicators','risk','news','funded'];
-  const cleanParams: any = {};
+  const cleanParams: Record<string, any> = {};
   for (const k of allowedKeys) if (k in params) cleanParams[k] = params[k];
 
-  return { ok: true, data: { name, strategy, description, parameters: cleanParams } };
+  return { error: null, data: { name, strategy, description, parameters: cleanParams } };
 }
 
 // Endpoint para verificar pago y crear bot custom
@@ -174,16 +179,19 @@ router.post('/verify', authenticateToken, async (req: AuthRequest, res: Response
     }
 
     // Validar y sanear la config
-    const result = sanitizeBotConfig(botConfig);
-    if (!result.ok) return res.status(400).json({ error: result.error });
+    const sanitized = sanitizeBotConfig(botConfig);
+    if (sanitized.error) {
+      return res.status(400).json({ error: sanitized.error });
+    }
+    const data = sanitized.data!;
 
     const bot = await prisma.bot.create({
       data: {
         userId,
-        name: result.data.name,
-        description: result.data.description,
-        strategy: result.data.strategy,
-        parameters: { ...result.data.parameters, stripeSessionId: sessionId },
+        name: data.name,
+        description: data.description,
+        strategy: data.strategy,
+        parameters: { ...data.parameters, stripeSessionId: sessionId },
       },
     });
 
