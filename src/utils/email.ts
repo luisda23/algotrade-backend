@@ -31,7 +31,12 @@ function baseTemplate(opts: {
   <span style="display:none;visibility:hidden;opacity:0;height:0;width:0;overflow:hidden">${opts.preheader}</span>
   <div style="max-width:520px;margin:0 auto;padding:40px 20px">
     <div style="background:#ffffff;border-radius:16px;padding:40px 32px;border:1px solid #e5e5e5;box-shadow:0 1px 3px rgba(0,0,0,0.04)">
-      <div style="display:inline-block;width:48px;height:48px;border-radius:12px;background:#000000;color:#ffffff;text-align:center;line-height:48px;font-weight:800;font-size:18px;letter-spacing:0.5px;margin-bottom:24px">Y</div>
+      <div style="display:inline-block;width:48px;height:48px;border-radius:12px;background:#000000;margin-bottom:24px;padding:10px;box-sizing:border-box;line-height:0">
+        <svg viewBox="0 0 32 32" width="28" height="28" xmlns="http://www.w3.org/2000/svg" style="display:block">
+          <path d="M5 22 L11 16 L17 19 L23 11 L28 8" stroke="#ffffff" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+          <circle cx="28" cy="8" r="3" fill="#ffffff"/>
+        </svg>
+      </div>
       <h1 style="font-size:24px;font-weight:800;letter-spacing:-0.02em;margin:0 0 12px;color:#000;line-height:1.2">${opts.title}</h1>
       <p style="font-size:15px;line-height:1.55;color:#555;margin:0 0 24px">${opts.intro}</p>
       ${opts.block || ''}
