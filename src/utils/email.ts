@@ -1,11 +1,5 @@
 import { Resend } from 'resend';
 
-// Variables de entorno requeridas:
-//   RESEND_API_KEY  → de https://resend.com/api-keys
-//   EMAIL_FROM      → opcional; por defecto onboarding@resend.dev (sin dominio verificado).
-//                     Una vez verifiques yudbot.com en Resend, ponlo a:
-//                     "Yudbot <noreply@yudbot.com>"
-
 let cached: Resend | null = null;
 function getClient(): Resend {
   if (cached) return cached;
@@ -17,48 +11,122 @@ function getClient(): Resend {
 
 const FROM = process.env.EMAIL_FROM || 'Yudbot <onboarding@resend.dev>';
 
-export async function sendVerificationEmail(to: string, name: string, code: string): Promise<void> {
-  const client = getClient();
-
-  const html = `<!DOCTYPE html>
+// ───────── Plantilla base reutilizable ─────────
+function baseTemplate(opts: {
+  preheader: string;
+  title: string;
+  intro: string;
+  block?: string;
+  outro?: string;
+  footer?: string;
+}): string {
+  return `<!DOCTYPE html>
 <html>
 <head>
 <meta charset="utf-8"/>
-<title>Tu código de verificación</title>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>${opts.title}</title>
 </head>
-<body style="margin:0;padding:0;background:#f5f5f5;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;color:#1a1a1a">
+<body style="margin:0;padding:0;background:#f5f5f5;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Oxygen,Ubuntu,sans-serif;color:#1a1a1a">
+  <span style="display:none;visibility:hidden;opacity:0;height:0;width:0;overflow:hidden">${opts.preheader}</span>
   <div style="max-width:520px;margin:0 auto;padding:40px 20px">
-    <div style="background:#ffffff;border-radius:16px;padding:40px 32px;border:1px solid #e5e5e5">
+    <div style="background:#ffffff;border-radius:16px;padding:40px 32px;border:1px solid #e5e5e5;box-shadow:0 1px 3px rgba(0,0,0,0.04)">
       <div style="display:inline-block;width:48px;height:48px;border-radius:12px;background:#000000;color:#ffffff;text-align:center;line-height:48px;font-weight:800;font-size:18px;letter-spacing:0.5px;margin-bottom:24px">Y</div>
-      <h1 style="font-size:24px;font-weight:800;letter-spacing:-0.02em;margin:0 0 12px;color:#000">Verifica tu email</h1>
-      <p style="font-size:15px;line-height:1.55;color:#555;margin:0 0 24px">Hola ${name || ''},<br/>Introduce este código en Yudbot para activar tu cuenta:</p>
-      <div style="background:#f5f5f5;border-radius:12px;padding:24px;text-align:center;margin:0 0 24px">
-        <div style="font-family:'SF Mono','Menlo','Consolas',monospace;font-size:36px;font-weight:700;letter-spacing:14px;color:#000">${code}</div>
-      </div>
-      <p style="font-size:13px;color:#888;margin:0">Este código caduca en 15 minutos. Si no creaste esta cuenta, ignora este correo.</p>
+      <h1 style="font-size:24px;font-weight:800;letter-spacing:-0.02em;margin:0 0 12px;color:#000;line-height:1.2">${opts.title}</h1>
+      <p style="font-size:15px;line-height:1.55;color:#555;margin:0 0 24px">${opts.intro}</p>
+      ${opts.block || ''}
+      ${opts.outro ? `<p style="font-size:14px;line-height:1.55;color:#666;margin:24px 0 0">${opts.outro}</p>` : ''}
     </div>
-    <div style="text-align:center;margin-top:20px;font-size:12px;color:#888">
-      Yudbot · Generador de bots para MetaTrader<br/>
-      No respondas a este correo. Para soporte: hola@yudbot.com
+    <div style="text-align:center;margin-top:20px;font-size:12px;color:#888;line-height:1.6">
+      ${opts.footer || 'Yudbot · Generador de bots para MetaTrader 4 y 5<br/>No respondas a este correo. Para soporte: <a href="mailto:hola@yudbot.com" style="color:#000;text-decoration:underline">hola@yudbot.com</a>'}
     </div>
   </div>
 </body>
 </html>`;
+}
+
+// ───────── EMAIL: BIENVENIDA TRAS SIGNUP ─────────
+export async function sendWelcomeEmail(to: string, name: string): Promise<void> {
+  const client = getClient();
+  const greeting = name ? name.split(' ')[0] : 'trader';
+
+  const html = baseTemplate({
+    preheader: '¡Bienvenido a Yudbot! Tu cuenta ya está activa.',
+    title: `¡Bienvenido a Yudbot, ${greeting}!`,
+    intro: 'Tu cuenta ya está activa. Has dado el primer paso para crear bots de trading personalizados sin escribir código.',
+    block: `
+      <div style="background:#fafafa;border-radius:12px;padding:20px;margin:0 0 16px;border:1px solid #eee">
+        <div style="font-size:13px;font-weight:700;color:#000;margin-bottom:10px;text-transform:uppercase;letter-spacing:0.5px">Próximos pasos</div>
+        <ol style="margin:0;padding-left:20px;color:#444;line-height:1.7;font-size:14px">
+          <li>Crea tu primer bot con el wizard guiado de 8 pasos.</li>
+          <li>Elige mercado, estrategia, indicadores y reglas de riesgo.</li>
+          <li>Descarga el archivo .mq5 / .mq4 y arrástralo a MetaTrader.</li>
+        </ol>
+      </div>
+      <a href="https://yudbot.com/app" style="display:inline-block;background:#000;color:#fff;text-decoration:none;padding:12px 24px;border-radius:10px;font-weight:600;font-size:14px;margin-top:8px">Crear mi primer bot →</a>
+    `,
+    outro: 'Por seguridad, cada vez que inicies sesión te enviaremos un código de 6 dígitos a este email.',
+  });
+
+  const text = `¡Bienvenido a Yudbot, ${greeting}!
+
+Tu cuenta ya está activa.
+
+Próximos pasos:
+1. Crea tu primer bot con el wizard guiado.
+2. Elige mercado, estrategia, indicadores y reglas de riesgo.
+3. Descarga el .mq5 o .mq4 y arrástralo a MetaTrader.
+
+Empieza aquí: https://yudbot.com/app
+
+Por seguridad, cada vez que inicies sesión te enviaremos un código de 6 dígitos a este email.
+
+— El equipo de Yudbot`;
+
+  const { error } = await client.emails.send({
+    from: FROM,
+    to,
+    subject: `¡Bienvenido a Yudbot, ${greeting}! 🤖`,
+    text,
+    html,
+  });
+
+  if (error) {
+    throw new Error(`Resend error: ${error.message || JSON.stringify(error)}`);
+  }
+}
+
+// ───────── EMAIL: CÓDIGO DE LOGIN (MFA) ─────────
+export async function sendLoginCodeEmail(to: string, name: string, code: string): Promise<void> {
+  const client = getClient();
+
+  const html = baseTemplate({
+    preheader: `Tu código de acceso a Yudbot: ${code}`,
+    title: 'Tu código de acceso',
+    intro: `Hola ${name || ''},<br/>Para entrar a tu cuenta de Yudbot, introduce este código:`,
+    block: `
+      <div style="background:#f5f5f5;border-radius:12px;padding:24px;text-align:center;margin:0 0 20px">
+        <div style="font-family:'SF Mono','Menlo','Consolas',monospace;font-size:36px;font-weight:700;letter-spacing:14px;color:#000">${code}</div>
+      </div>
+      <p style="font-size:13px;color:#888;margin:0 0 4px">Caduca en 10 minutos.</p>
+      <p style="font-size:13px;color:#888;margin:0">Si no estás intentando acceder a tu cuenta, ignora este correo y considera cambiar tu contraseña.</p>
+    `,
+  });
 
   const text = `Hola ${name || ''},
 
-Tu código de verificación de Yudbot es:
+Tu código de acceso a Yudbot es:
 
   ${code}
 
-Caduca en 15 minutos. Si no creaste esta cuenta, ignora este correo.
+Caduca en 10 minutos. Si no estás intentando acceder a tu cuenta, ignora este correo.
 
 — Yudbot`;
 
   const { error } = await client.emails.send({
     from: FROM,
     to,
-    subject: `Tu código Yudbot: ${code}`,
+    subject: `Yudbot: tu código de acceso ${code}`,
     text,
     html,
   });

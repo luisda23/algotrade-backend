@@ -3,9 +3,17 @@ import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import { prisma } from '../server';
 import { authenticateToken, AuthRequest, JWT_SECRET } from '../middleware/auth';
-import { sendVerificationEmail, generateVerificationCode } from '../utils/email';
+import { sendWelcomeEmail, sendLoginCodeEmail, generateVerificationCode } from '../utils/email';
 
 const router = Router();
+
+// Oculta el email para mostrarlo en la UI (juan@gmail.com → j***n@gmail.com)
+function maskEmail(email: string): string {
+  const [local, domain] = email.split('@');
+  if (!local || !domain) return email;
+  if (local.length <= 2) return local[0] + '***@' + domain;
+  return local[0] + '***' + local[local.length - 1] + '@' + domain;
+}
 
 interface SignupBody {
   email: string;
@@ -46,9 +54,6 @@ router.post('/signup', async (req: Request, res: Response) => {
     }
 
     const hashedPassword = await bcrypt.hash(password, 10);
-    const code = generateVerificationCode();
-    const codeHash = await bcrypt.hash(code, 10);
-    const expires = new Date(Date.now() + 15 * 60 * 1000); // 15 min
 
     const newUser = await prisma.user.create({
       data: {
@@ -56,20 +61,15 @@ router.post('/signup', async (req: Request, res: Response) => {
         password: hashedPassword,
         name,
         referredBy: referralCode || null,
-        emailVerified: false,
-        verificationCode: codeHash,
-        verificationCodeExpires: expires,
-        verificationAttempts: 0,
+        emailVerified: true,  // Sin verificación previa: la MFA en login prueba ownership
       },
     });
 
-    // Enviar email de verificación. Si falla, dejamos al usuario creado pero
-    // le devolvemos un error claro para que pida un reenvío desde el frontend.
+    // Email de bienvenida (no es bloqueante — si falla seguimos)
     try {
-      await sendVerificationEmail(email, name, code);
+      await sendWelcomeEmail(email, name);
     } catch (mailErr: any) {
-      console.error('Email send error:', mailErr);
-      // El usuario existe pero el email no se envió — frontend mostrará UI para reenviar
+      console.error('Welcome email send error:', mailErr);
     }
 
     const token = jwt.sign(
@@ -114,16 +114,40 @@ router.post('/login', async (req: Request, res: Response) => {
       return res.status(401).json({ error: 'Credenciales inválidas' });
     }
 
-    const token = jwt.sign(
-      { userId: user.id, email: user.email },
+    // Generar código de 6 dígitos para MFA
+    const code = generateVerificationCode();
+    const codeHash = await bcrypt.hash(code, 10);
+    const expires = new Date(Date.now() + 10 * 60 * 1000); // 10 min
+
+    await prisma.user.update({
+      where: { id: user.id },
+      data: {
+        verificationCode: codeHash,
+        verificationCodeExpires: expires,
+        verificationAttempts: 0,
+      },
+    });
+
+    try {
+      await sendLoginCodeEmail(user.email, user.name, code);
+    } catch (mailErr: any) {
+      console.error('Login code email error:', mailErr);
+      return res.status(500).json({ error: 'No se pudo enviar el código. Intenta de nuevo.' });
+    }
+
+    // Pending token: solo identifica al usuario para el endpoint /verify-login.
+    // Caduca en 10 min y NO da acceso a ningún endpoint protegido.
+    const pendingToken = jwt.sign(
+      { type: 'pending-login', userId: user.id },
       JWT_SECRET,
-      { expiresIn: process.env.JWT_EXPIRATION || '7d' } as any
+      { expiresIn: '10m' }
     );
 
     res.json({
-      message: 'Login exitoso',
-      user: { id: user.id, email: user.email, name: user.name, emailVerified: user.emailVerified },
-      token,
+      requiresMFA: true,
+      pendingToken,
+      // Pista del email para mostrar en la UI sin filtrar el completo
+      emailHint: maskEmail(user.email),
     });
   } catch (error) {
     console.error(error);
@@ -193,31 +217,38 @@ router.put('/me', authenticateToken, async (req: AuthRequest, res: Response) => 
   }
 });
 
-// Verificar email con código
-router.post('/verify', authenticateToken, async (req: AuthRequest, res: Response) => {
+// Verificar el código del login (MFA) y devolver el token de sesión real
+router.post('/verify-login', async (req: Request, res: Response) => {
   try {
+    const pendingToken = typeof req.body?.pendingToken === 'string' ? req.body.pendingToken : '';
     const code = typeof req.body?.code === 'string' ? req.body.code.trim() : '';
+
+    if (!pendingToken) return res.status(400).json({ error: 'Token de login requerido' });
     if (!/^\d{6}$/.test(code)) {
       return res.status(400).json({ error: 'Código inválido (debe tener 6 dígitos)' });
     }
 
-    const user = await prisma.user.findUnique({ where: { id: req.userId } });
+    let payload: any;
+    try {
+      payload = jwt.verify(pendingToken, JWT_SECRET);
+    } catch {
+      return res.status(401).json({ error: 'El intento de login ha caducado. Vuelve a iniciar sesión.' });
+    }
+    if (payload?.type !== 'pending-login' || !payload.userId) {
+      return res.status(401).json({ error: 'Token de login inválido' });
+    }
+
+    const user = await prisma.user.findUnique({ where: { id: payload.userId } });
     if (!user) return res.status(404).json({ error: 'Usuario no encontrado' });
 
-    if (user.emailVerified) {
-      return res.json({ message: 'Email ya verificado', verified: true });
-    }
-
     if (!user.verificationCode || !user.verificationCodeExpires) {
-      return res.status(400).json({ error: 'No hay código pendiente. Pide uno nuevo.' });
+      return res.status(400).json({ error: 'No hay código pendiente. Vuelve a iniciar sesión.' });
     }
-
     if (user.verificationCodeExpires.getTime() < Date.now()) {
-      return res.status(400).json({ error: 'El código ha caducado. Pide uno nuevo.' });
+      return res.status(400).json({ error: 'El código ha caducado. Vuelve a iniciar sesión.' });
     }
-
     if ((user.verificationAttempts || 0) >= 5) {
-      return res.status(429).json({ error: 'Demasiados intentos. Pide un código nuevo.' });
+      return res.status(429).json({ error: 'Demasiados intentos. Vuelve a iniciar sesión.' });
     }
 
     const match = await bcrypt.compare(code, user.verificationCode);
@@ -229,33 +260,55 @@ router.post('/verify', authenticateToken, async (req: AuthRequest, res: Response
       return res.status(401).json({ error: 'Código incorrecto' });
     }
 
+    // Limpia el código y emite el token real de sesión
     await prisma.user.update({
       where: { id: user.id },
       data: {
-        emailVerified: true,
         verificationCode: null,
         verificationCodeExpires: null,
         verificationAttempts: 0,
       },
     });
 
-    res.json({ message: 'Email verificado correctamente', verified: true });
+    const token = jwt.sign(
+      { userId: user.id, email: user.email },
+      JWT_SECRET,
+      { expiresIn: process.env.JWT_EXPIRATION || '7d' } as any
+    );
+
+    res.json({
+      message: 'Login completado',
+      user: { id: user.id, email: user.email, name: user.name, emailVerified: user.emailVerified },
+      token,
+    });
   } catch (error: any) {
     console.error(error);
     res.status(500).json({ error: 'Error en el servidor' });
   }
 });
 
-// Reenviar código de verificación
-router.post('/resend-verification', authenticateToken, async (req: AuthRequest, res: Response) => {
+// Reenviar el código del login
+router.post('/resend-login-code', async (req: Request, res: Response) => {
   try {
-    const user = await prisma.user.findUnique({ where: { id: req.userId } });
-    if (!user) return res.status(404).json({ error: 'Usuario no encontrado' });
-    if (user.emailVerified) return res.json({ message: 'Ya verificado' });
+    const pendingToken = typeof req.body?.pendingToken === 'string' ? req.body.pendingToken : '';
+    if (!pendingToken) return res.status(400).json({ error: 'Token de login requerido' });
 
-    // Rate limit: solo se puede pedir reenvío si el código actual lleva > 60s emitido
+    let payload: any;
+    try {
+      payload = jwt.verify(pendingToken, JWT_SECRET);
+    } catch {
+      return res.status(401).json({ error: 'El intento de login ha caducado. Vuelve a iniciar sesión.' });
+    }
+    if (payload?.type !== 'pending-login' || !payload.userId) {
+      return res.status(401).json({ error: 'Token de login inválido' });
+    }
+
+    const user = await prisma.user.findUnique({ where: { id: payload.userId } });
+    if (!user) return res.status(404).json({ error: 'Usuario no encontrado' });
+
+    // Rate limit: si el código se emitió hace < 60s, bloquea reenvío
     if (user.verificationCodeExpires) {
-      const issuedAt = user.verificationCodeExpires.getTime() - 15 * 60 * 1000;
+      const issuedAt = user.verificationCodeExpires.getTime() - 10 * 60 * 1000;
       const sinceIssued = Date.now() - issuedAt;
       if (sinceIssued < 60 * 1000) {
         return res.status(429).json({ error: 'Espera un minuto antes de pedir otro código' });
@@ -264,7 +317,7 @@ router.post('/resend-verification', authenticateToken, async (req: AuthRequest, 
 
     const code = generateVerificationCode();
     const codeHash = await bcrypt.hash(code, 10);
-    const expires = new Date(Date.now() + 15 * 60 * 1000);
+    const expires = new Date(Date.now() + 10 * 60 * 1000);
 
     await prisma.user.update({
       where: { id: user.id },
@@ -276,9 +329,9 @@ router.post('/resend-verification', authenticateToken, async (req: AuthRequest, 
     });
 
     try {
-      await sendVerificationEmail(user.email, user.name, code);
+      await sendLoginCodeEmail(user.email, user.name, code);
     } catch (mailErr: any) {
-      console.error('Email resend error:', mailErr);
+      console.error('Login code resend error:', mailErr);
       return res.status(500).json({ error: 'No se pudo enviar el email. Intenta de nuevo.' });
     }
 
