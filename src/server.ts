@@ -2,7 +2,7 @@ import express, { Express, Request, Response } from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
 import dotenv from 'dotenv';
-import { PrismaClient } from '@prisma/client';
+import { prisma } from './db';
 
 import authRoutes from './routes/auth';
 import botsRoutes from './routes/bots';
@@ -13,7 +13,6 @@ import paymentRoutes from './routes/payments';
 dotenv.config();
 
 const app: Express = express();
-const prisma = new PrismaClient();
 const PORT = process.env.PORT || 5000;
 
 // Railway / Vercel viven detrás de un proxy, hay que confiar en X-Forwarded-For
@@ -96,4 +95,7 @@ app.listen(PORT, () => {
   console.log(`✅ Server ejecutándose en http://localhost:${PORT}`);
 });
 
-export { prisma, app };
+// Re-exportamos prisma para retrocompatibilidad: routes/* siguen importando
+// desde '../server'. La fuente real es './db' — ahí vive el cliente único.
+export { prisma };
+export { app };

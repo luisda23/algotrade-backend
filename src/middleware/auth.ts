@@ -1,6 +1,10 @@
 import { Request, Response, NextFunction } from 'express';
 import jwt from 'jsonwebtoken';
-import { prisma } from '../server';
+// Import directo desde ./db para evitar el circular: server.ts → routes/*
+// → middleware/auth.ts. Si importáramos `prisma` de server.ts, durante el
+// registro de rutas el middleware se cargaría antes de que server.ts haya
+// terminado de inicializar, y el proceso crashearía al arrancar.
+import { prisma } from '../db';
 import { errResp, RC } from '../utils/responses';
 
 interface AuthRequest extends Request {
