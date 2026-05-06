@@ -43,6 +43,11 @@ model Bot {
   parameters    Json
   status        String     @default("draft")
 
+  // ID de la orden de Lemon Squeezy que pagó este bot. Único en BD para que
+  // dos requests concurrentes a /verify no puedan crear el mismo bot dos veces.
+  // Las filas previas a este campo tienen NULL — solo aplica el unique a no-NULL.
+  lemonOrderId  String?    @unique
+
   brokerConnectionId String?
   brokerConnection   BrokerConnection? @relation(fields: [brokerConnectionId], references: [id])
 
