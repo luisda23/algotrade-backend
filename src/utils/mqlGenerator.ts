@@ -16,6 +16,8 @@
 //   p.ej. MACD-trigger + RSI-filter + Fib-trigger → entra cuando MACD cruzó
 //   o el precio toca Fib mientras RSI está sobrevendido.
 
+import { MQL_COPY, Lang, strategyDesc } from './mqlCopy';
+
 interface BotParams {
   market?: string;
   pair?: string;
@@ -533,7 +535,7 @@ const INDICATOR_DEFS_MQL5: Record<string, IndDef> = {
   // ─── SOPORTE / RESISTENCIA (solo trigger, no continuos) ───
   fib: {
     globals: 'int handleFib_Fractals;',
-    init: '   handleFib_Fractals = iFractals(InpSymbol, InpTimeframe);\n   if(handleFib_Fractals == INVALID_HANDLE) { Print("Error creando Fractals para Fib"); return INIT_FAILED; }',
+    init: '   handleFib_Fractals = iFractals(InpSymbol, InpTimeframe);\n   if(handleFib_Fractals == INVALID_HANDLE) { Print("Error creando Fib Fractals"); return INIT_FAILED; }',
     release: '   IndicatorRelease(handleFib_Fractals);',
     logic: () => ({
       setup: [
@@ -592,7 +594,7 @@ const INDICATOR_DEFS_MQL5: Record<string, IndDef> = {
   },
   sr: {
     globals: 'int handleSR_Fractals;\nint handleSR_ATR;',
-    init: '   handleSR_Fractals = iFractals(InpSymbol, InpTimeframe);\n   handleSR_ATR = iATR(InpSymbol, InpTimeframe, 14);\n   if(handleSR_Fractals == INVALID_HANDLE || handleSR_ATR == INVALID_HANDLE) { Print("Error creando handles S/R"); return INIT_FAILED; }',
+    init: '   handleSR_Fractals = iFractals(InpSymbol, InpTimeframe);\n   handleSR_ATR = iATR(InpSymbol, InpTimeframe, 14);\n   if(handleSR_Fractals == INVALID_HANDLE || handleSR_ATR == INVALID_HANDLE) { Print("Error creando S/R"); return INIT_FAILED; }',
     release: '   IndicatorRelease(handleSR_Fractals);\n   IndicatorRelease(handleSR_ATR);',
     logic: () => ({
       setup: [
@@ -678,7 +680,8 @@ export function generateMQL5(bot: {
   description?: string | null;
   strategy: string;
   parameters: BotParams;
-}): string {
+}, lang: Lang = 'es'): string {
+  const T = MQL_COPY[lang];
   const p = bot.parameters || {};
   const risk = p.risk || {};
   const stopLoss = risk.stopLoss || 1.5;
@@ -731,19 +734,6 @@ export function generateMQL5(bot: {
   const newsHasEventFilter = selectedEventIds.length > 0 && selectedEventIds.length < Object.keys(NEWS_EVENT_PATTERNS).length;
   const generatedDate = new Date().toISOString().split('T')[0];
 
-  const strategyDescriptions: Record<string, string> = {
-    scalping: 'Scalping rápido (1m-5m timeframe)',
-    swing: 'Swing trading (4h-1d timeframe)',
-    grid: 'Grid trading con niveles fijos',
-    momentum: 'Momentum con detección de fuerza',
-    mean: 'Mean reversion (reversión a la media)',
-    breakout: 'Breakout de rango',
-    dca: 'Dollar-cost averaging',
-    trend: 'Trend following',
-    reversal: 'Reversal',
-    hedge: 'Hedging',
-  };
-
   const sanitizeName = bot.name.replace(/[^a-zA-Z0-9_]/g, '_');
 
   const ind = buildIndicatorBlocks(indicators, strategy);
@@ -764,42 +754,42 @@ export function generateMQL5(bot: {
 
   return `//+------------------------------------------------------------------+
 //|                                              ${sanitizeName}.mq5 |
-//|                              Generado por YudBot · ${generatedDate} |
+//|                              ${T.headerGenerated} · ${generatedDate} |
 //|                                          https://yudbot.com |
 //+------------------------------------------------------------------+
 #property copyright "YudBot"
 #property link      "https://yudbot.com"
 #property version   "1.00"
 #property description "${escapeMQL(bot.description || bot.name)}"
-#property description "Estrategia: ${strategyDescriptions[strategy] || strategy}"
-#property description "Par: ${pair} · Apalancamiento: 1:${leverage}"
+#property description "${T.propStrategy}: ${strategyDesc(strategy, lang)}"
+#property description "${T.propPair}: ${pair} · ${T.propLeverage}: 1:${leverage}"
 
 #include <Trade\\Trade.mqh>
 #include <Trade\\PositionInfo.mqh>
 #include <Trade\\SymbolInfo.mqh>
 
-input group    "═══ CONFIGURACIÓN GENERAL ═══"
+input group    "${T.groupGeneral}"
 input string         InpSymbol      = "${symbol}";
 input ENUM_TIMEFRAMES InpTimeframe  = ${timeframeMQL};
 input int            InpMagicNumber = ${Math.floor(Math.random() * 900000) + 100000};
 
-input group    "═══ TAMAÑO DE LOTE ═══"
+input group    "${T.groupLot}"
 input bool     InpUseFixedLot      = ${lotMode === 'fixed' ? 'true' : 'false'};
 input double   InpFixedLot         = ${fixedLot.toFixed(2)};
 
-input group    "═══ GESTIÓN DE RIESGO ═══"
+input group    "${T.groupRisk}"
 input double   InpStopLoss         = ${stopLoss};
 input double   InpTakeProfit       = ${takeProfit};
 input double   InpRiskPerTrade     = ${posSize};
 input double   InpMaxDailyLoss     = ${dailyLoss};
 input int      InpLeverage         = ${leverage};
 
-input group    "═══ HORARIO DE OPERACIÓN ═══"
+input group    "${T.groupTime}"
 input bool     InpUseTimeFilter    = true;
 input int      InpStartHour        = 8;
 input int      InpEndHour          = 22;
 
-input group    "═══ FILTRO DE NOTICIAS ═══"
+input group    "${T.groupNews}"
 input bool     InpFilterNews       = ${effectiveNewsEnabled};
 input int      InpNewsMinutesBefore = ${newsBefore};
 input int      InpNewsMinutesAfter  = ${newsAfter};
@@ -821,7 +811,7 @@ int OnInit()
 {
    Print("═══════════════════════════════════════");
    Print("  ${escapeMQL(bot.name)}");
-   Print("  Generado por YudBot · ${generatedDate}");
+   Print("  ${T.headerGenerated} · ${generatedDate}");
    Print("═══════════════════════════════════════");
 
    trade.SetExpertMagicNumber(InpMagicNumber);
@@ -831,7 +821,7 @@ int OnInit()
 
    if(!symbolInfo.Name(InpSymbol))
    {
-      Print("Error: No se puede acceder al símbolo ", InpSymbol);
+      Print("${T.initSymbolError} ", InpSymbol);
       return(INIT_FAILED);
    }
 
@@ -841,9 +831,9 @@ ${ind.inits.join('\n')}
    dailyStartBalance = initialBalance;
    lastDayCheck = TimeCurrent();
 
-   Print("Bot inicializado correctamente");
-   Print("Balance inicial: ", initialBalance);
-   Print("Apalancamiento: 1:", InpLeverage);
+   Print("${T.initSuccess}");
+   Print("${T.initBalance} ", initialBalance);
+   Print("${T.initLeverage}", InpLeverage);
 
    return(INIT_SUCCEEDED);
 }
@@ -913,7 +903,7 @@ bool CheckDailyLoss()
    double dailyLossPct = ((dailyStartBalance - currentBalance) / dailyStartBalance) * 100.0;
    if(dailyLossPct >= InpMaxDailyLoss)
    {
-      Print("⚠️ Pérdida diaria máxima alcanzada (", dailyLossPct, "%) - Bot pausado");
+      Print("${T.dailyLossHit} (", dailyLossPct, "%) - ${T.dailyLossPaused}");
       return false;
    }
    return true;
@@ -980,13 +970,13 @@ void OnTick()
 
    // Filtros de bloqueo evaluados solo en barra nueva (más eficiente y con
    // log claro para que sepas por qué el bot no operó este ciclo).
-   if(!CheckDailyLoss())  { Print("[skip] pérdida diaria máxima alcanzada"); return; }
-   if(!IsTradingHours())  { Print("[skip] fuera de horario (", InpStartHour, "-", InpEndHour, " hora del broker)"); return; }
-   if(IsNewsTime())       { Print("[skip] noticia de alto impacto cercana"); return; }
-   if(HasOwnPosition())   { Print("[skip] ya hay una posición abierta de este bot"); return; }
+   if(!CheckDailyLoss())  { Print("${T.skipDailyLoss}"); return; }
+   if(!IsTradingHours())  { Print("${T.skipHours}", InpStartHour, "-", InpEndHour, "${T.skipBrokerTime}"); return; }
+   if(IsNewsTime())       { Print("${T.skipNews}"); return; }
+   if(HasOwnPosition())   { Print("${T.skipPosition}"); return; }
 
-   //--- Estrategia: ${strategy} · indicadores: ${indicators.join(', ') || '(ninguno)'}
-   //--- Lógica: (al menos un trigger fire) AND (todos los filtros confirman)
+   //--- ${T.commentStrategy}: ${strategy} · ${T.commentIndicators}: ${indicators.join(', ') || T.commentNone}
+   //--- ${T.commentLogic}
    double bidPrice = SymbolInfoDouble(InpSymbol, SYMBOL_BID);
    bool buySignal = false;
    bool sellSignal = false;
@@ -1005,9 +995,9 @@ void OnTick()
       double tp = ask * (1 + InpTakeProfit/100.0);
       double lot = GetTradeLot(MathAbs(ask - sl) / SymbolInfoDouble(InpSymbol, SYMBOL_POINT));
       if(!trade.Buy(lot, InpSymbol, ask, sl, tp, "${escapeMQL(bot.name)} BUY"))
-         Print("BUY rechazada: ", trade.ResultRetcode(), " ", trade.ResultRetcodeDescription(), " (lot=", lot, " sl=", sl, " tp=", tp, ")");
+         Print("${T.buyRejected} ", trade.ResultRetcode(), " ", trade.ResultRetcodeDescription(), " (lot=", lot, " sl=", sl, " tp=", tp, ")");
       else
-         Print("BUY enviada: lot=", lot, " sl=", sl, " tp=", tp);
+         Print("${T.buySent} lot=", lot, " sl=", sl, " tp=", tp);
    }
    else if(sellSignal)
    {
@@ -1016,14 +1006,14 @@ void OnTick()
       double tp = bid * (1 - InpTakeProfit/100.0);
       double lot = GetTradeLot(MathAbs(sl - bid) / SymbolInfoDouble(InpSymbol, SYMBOL_POINT));
       if(!trade.Sell(lot, InpSymbol, bid, sl, tp, "${escapeMQL(bot.name)} SELL"))
-         Print("SELL rechazada: ", trade.ResultRetcode(), " ", trade.ResultRetcodeDescription(), " (lot=", lot, " sl=", sl, " tp=", tp, ")");
+         Print("${T.sellRejected} ", trade.ResultRetcode(), " ", trade.ResultRetcodeDescription(), " (lot=", lot, " sl=", sl, " tp=", tp, ")");
       else
-         Print("SELL enviada: lot=", lot, " sl=", sl, " tp=", tp);
+         Print("${T.sellSent} lot=", lot, " sl=", sl, " tp=", tp);
    }
 }
 
 //+------------------------------------------------------------------+
-//| END OF FILE — Generado por YudBot                             |
+//| ${T.headerEndOfFile}                             |
 //+------------------------------------------------------------------+
-`;
+`.replace(/Print\("Error creando ([A-Za-z0-9 \/%]+)"\)/g, (_m, name) => `Print("${T.indicatorErrorPrefix} ${name}")`);
 }

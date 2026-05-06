@@ -13,8 +13,12 @@ router.get('/:botId/download', authenticateToken, async (req: AuthRequest, res: 
     const { botId } = req.params;
     const format = (req.query.format as string) === 'mq4' ? 'mq4' : 'mq5';
 
+    // Cargamos bot + user en una sola query: necesitamos user.lang para
+    // que los Print/comments del .mq5/.mq4 generado salgan en el idioma
+    // que el usuario eligió en el toggle del app.
     const bot = await prisma.bot.findUnique({
       where: { id: botId },
+      include: { user: { select: { lang: true } } },
     });
 
     if (!bot || bot.userId !== req.userId) {
@@ -28,9 +32,10 @@ router.get('/:botId/download', authenticateToken, async (req: AuthRequest, res: 
       strategy: bot.strategy,
       parameters: bot.parameters as any,
     };
+    const lang: 'es' | 'en' = bot.user?.lang === 'en' ? 'en' : 'es';
 
     // Generar según formato
-    const code = format === 'mq4' ? generateMQL4(botData) : generateMQL5(botData);
+    const code = format === 'mq4' ? generateMQL4(botData, lang) : generateMQL5(botData, lang);
     const filename = bot.name.replace(/[^a-zA-Z0-9_]/g, '_') + '.' + format;
 
     res.setHeader('Content-Type', `application/x-${format}`);

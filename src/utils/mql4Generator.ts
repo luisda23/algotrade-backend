@@ -3,6 +3,8 @@
 // Mismo modelo trigger+filter que mqlGenerator.ts, pero MQL4 no usa handles:
 // las funciones iX() devuelven el valor directamente.
 
+import { MQL_COPY, Lang, strategyDesc } from './mqlCopy';
+
 interface BotParams {
   market?: string;
   pair?: string;
@@ -581,7 +583,8 @@ export function generateMQL4(bot: {
   description?: string | null;
   strategy: string;
   parameters: BotParams;
-}): string {
+}, lang: Lang = 'es'): string {
+  const T = MQL_COPY[lang];
   const p = bot.parameters || {};
   const risk = p.risk || {};
   const stopLoss = risk.stopLoss || 1.5;
@@ -606,13 +609,6 @@ export function generateMQL4(bot: {
   const fixedLotRaw = typeof lotConf.fixedLot === 'number' ? lotConf.fixedLot : 0.10;
   const fixedLot = Math.min(100, Math.max(0.01, fixedLotRaw));
 
-  const strategyDescriptions: Record<string, string> = {
-    scalping: 'Scalping rápido (M1-M5)', swing: 'Swing trading (H4-D1)',
-    grid: 'Grid trading', momentum: 'Momentum',
-    mean: 'Mean reversion', breakout: 'Breakout',
-    dca: 'DCA', trend: 'Trend following',
-    reversal: 'Reversal', hedge: 'Hedging',
-  };
 
   const sanitizeName = bot.name.replace(/[^a-zA-Z0-9_]/g, '_');
 
@@ -631,7 +627,7 @@ export function generateMQL4(bot: {
 
   return `//+------------------------------------------------------------------+
 //|                                              ${sanitizeName}.mq4 |
-//|                              Generado por YudBot · ${generatedDate} |
+//|                              ${T.headerGenerated} · ${generatedDate} |
 //|                                          https://yudbot.com |
 //+------------------------------------------------------------------+
 #property copyright "YudBot"
@@ -639,27 +635,27 @@ export function generateMQL4(bot: {
 #property version   "1.00"
 #property strict
 #property description "${escapeMQL(bot.description || bot.name)}"
-#property description "Estrategia: ${strategyDescriptions[strategy] || strategy}"
-#property description "Par: ${pair} · Apalancamiento: 1:${leverage}"
+#property description "${T.propStrategy}: ${strategyDesc(strategy, lang)}"
+#property description "${T.propPair}: ${pair} · ${T.propLeverage}: 1:${leverage}"
 
-extern string  _GENERAL              = "═══ CONFIGURACIÓN GENERAL ═══";
+extern string  _GENERAL              = "${T.groupGeneral}";
 extern string  InpSymbol             = "${symbol}";
 extern int     InpTimeframe          = ${timeframeMQL};
 extern int     InpMagicNumber        = ${magicNumber};
 extern int     InpSlippage           = 10;
 
-extern string  _LOT                  = "═══ TAMAÑO DE LOTE ═══";
+extern string  _LOT                  = "${T.groupLot}";
 extern bool    InpUseFixedLot        = ${lotMode === 'fixed' ? 'true' : 'false'};
 extern double  InpFixedLot           = ${fixedLot.toFixed(2)};
 
-extern string  _RISK                 = "═══ GESTIÓN DE RIESGO ═══";
+extern string  _RISK                 = "${T.groupRisk}";
 extern double  InpStopLoss           = ${stopLoss};
 extern double  InpTakeProfit         = ${takeProfit};
 extern double  InpRiskPerTrade       = ${posSize};
 extern double  InpMaxDailyLoss       = ${dailyLoss};
 extern int     InpLeverage           = ${leverage};
 
-extern string  _TIME                 = "═══ HORARIO DE OPERACIÓN ═══";
+extern string  _TIME                 = "${T.groupTime}";
 extern bool    InpUseTimeFilter      = true;
 extern int     InpStartHour          = 8;
 extern int     InpEndHour            = 22;
@@ -673,30 +669,29 @@ int OnInit()
 {
    Print("═══════════════════════════════════════");
    Print("  ${escapeMQL(bot.name)}");
-   Print("  Generado por YudBot · ${generatedDate}");
+   Print("  ${T.headerGenerated} · ${generatedDate}");
    Print("═══════════════════════════════════════");
 
    // Refuso operar sobre un chart de símbolo distinto al configurado: si
    // generaste el bot para EURUSD y lo arrastras a un chart de GBPUSD, el
    // EA debe abortar en lugar de operar silenciosamente en el par
-   // equivocado. MT4 no expone los iX() con symbol arbitrario fiable en
-   // todos los brokers, así que aquí exigimos chart == InpSymbol.
+   // equivocado.
    if(StringCompare(Symbol(), InpSymbol, false) != 0)
    {
-      Print("Error: el bot está configurado para ", InpSymbol, " pero el chart es ", Symbol(), ". Adjúntalo a un chart de ", InpSymbol, ".");
+      Print("${T.chartMismatchPre} ", InpSymbol, " ${T.chartMismatchMid} ", Symbol(), ". ${T.chartMismatchTail} ", InpSymbol, ".");
       return INIT_FAILED;
    }
 
    initialBalance = AccountBalance();
    dailyStartBalance = initialBalance;
    lastDayCheck = TimeCurrent();
-   Print("Bot inicializado correctamente");
-   Print("Balance inicial: ", initialBalance);
-   Print("Apalancamiento: 1:", InpLeverage);
+   Print("${T.initSuccess}");
+   Print("${T.initBalance} ", initialBalance);
+   Print("${T.initLeverage}", InpLeverage);
    return(INIT_SUCCEEDED);
 }
 
-void OnDeinit(const int reason) { Print("Bot detenido. Razón: ", reason); }
+void OnDeinit(const int reason) { Print("${T.deinitStopped} ", reason); }
 
 bool CheckDailyLoss()
 {
@@ -714,7 +709,7 @@ bool CheckDailyLoss()
    double dailyLossPct = ((dailyStartBalance - AccountBalance()) / dailyStartBalance) * 100.0;
    if(dailyLossPct >= InpMaxDailyLoss)
    {
-      Print("⚠️ Pérdida diaria máxima alcanzada (", dailyLossPct, "%) - Bot pausado");
+      Print("${T.dailyLossHit} (", dailyLossPct, "%) - ${T.dailyLossPaused}");
       return false;
    }
    return true;
@@ -771,12 +766,12 @@ void OnTick()
    if(Time[0] == lastBarTime) return;
    lastBarTime = Time[0];
 
-   if(!CheckDailyLoss()) { Print("[skip] pérdida diaria máxima alcanzada"); return; }
-   if(!IsTradingHours()) { Print("[skip] fuera de horario (", InpStartHour, "-", InpEndHour, " hora del broker)"); return; }
-   if(HasOpenPosition()) { Print("[skip] ya hay una posición abierta de este bot"); return; }
+   if(!CheckDailyLoss()) { Print("${T.skipDailyLoss}"); return; }
+   if(!IsTradingHours()) { Print("${T.skipHours}", InpStartHour, "-", InpEndHour, "${T.skipBrokerTime}"); return; }
+   if(HasOpenPosition()) { Print("${T.skipPosition}"); return; }
 
-   //--- Estrategia: ${strategy} · indicadores: ${indicators.join(', ') || '(ninguno)'}
-   //--- Lógica: (al menos un trigger fire) AND (todos los filtros confirman)
+   //--- ${T.commentStrategy}: ${strategy} · ${T.commentIndicators}: ${indicators.join(', ') || T.commentNone}
+   //--- ${T.commentLogic}
    bool buySignal = false;
    bool sellSignal = false;
 
@@ -793,8 +788,8 @@ void OnTick()
       double tp = Ask * (1 + InpTakeProfit/100.0);
       double lot = GetTradeLot(MathAbs(Ask - sl) / Point);
       int ticket = OrderSend(Symbol(), OP_BUY, lot, Ask, InpSlippage, sl, tp, "${escapeMQL(bot.name)} BUY", InpMagicNumber, 0, clrGreen);
-      if(ticket < 0) Print("Error al abrir BUY: ", GetLastError());
-      else Print("BUY abierta · Ticket: ", ticket, " · Lote: ", lot);
+      if(ticket < 0) Print("${T.buyOpenError} ", GetLastError());
+      else Print("${T.buyOpened} ", ticket, " · ${T.lot} ", lot);
    }
    else if(sellSignal)
    {
@@ -802,13 +797,13 @@ void OnTick()
       double tp = Bid * (1 - InpTakeProfit/100.0);
       double lot = GetTradeLot(MathAbs(sl - Bid) / Point);
       int ticket = OrderSend(Symbol(), OP_SELL, lot, Bid, InpSlippage, sl, tp, "${escapeMQL(bot.name)} SELL", InpMagicNumber, 0, clrRed);
-      if(ticket < 0) Print("Error al abrir SELL: ", GetLastError());
-      else Print("SELL abierta · Ticket: ", ticket, " · Lote: ", lot);
+      if(ticket < 0) Print("${T.sellOpenError} ", GetLastError());
+      else Print("${T.sellOpened} ", ticket, " · ${T.lot} ", lot);
    }
 }
 
 //+------------------------------------------------------------------+
-//| END OF FILE — Generado por YudBot                             |
+//| ${T.headerEndOfFile}                             |
 //+------------------------------------------------------------------+
 `;
 }
