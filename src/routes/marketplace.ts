@@ -1,6 +1,7 @@
 import { Router, Response } from 'express';
 import { prisma } from '../server';
 import { authenticateToken, AuthRequest } from '../middleware/auth';
+import { errResp, okResp, RC } from '../utils/responses';
 
 const router = Router();
 
@@ -20,7 +21,7 @@ router.get('/templates', async (req: any, res: Response) => {
     res.json(templates);
   } catch (error) {
     console.error(error);
-    res.status(500).json({ error: 'Error al obtener plantillas' });
+    res.status(500).json(errResp(RC.MP_TEMPLATES_FAIL, 'Failed to load templates'));
   }
 });
 
@@ -33,13 +34,13 @@ router.get('/templates/:templateId', async (req: any, res: Response) => {
     });
 
     if (!template) {
-      return res.status(404).json({ error: 'Plantilla no encontrada' });
+      return res.status(404).json(errResp(RC.MP_TEMPLATE_NOT_FOUND, 'Template not found'));
     }
 
     res.json(template);
   } catch (error) {
     console.error(error);
-    res.status(500).json({ error: 'Error al obtener la plantilla' });
+    res.status(500).json(errResp(RC.MP_TEMPLATE_GET_FAIL, 'Failed to load template'));
   }
 });
 
@@ -48,7 +49,7 @@ router.post('/buy', authenticateToken, async (req: AuthRequest, res: Response) =
     const { botTemplateId, brokerConnectionId } = req.body;
 
     if (!botTemplateId) {
-      return res.status(400).json({ error: 'Plantilla requerida' });
+      return res.status(400).json(errResp(RC.MP_TEMPLATE_REQUIRED, 'Template required'));
     }
 
     const template = await prisma.botTemplate.findUnique({
@@ -56,7 +57,7 @@ router.post('/buy', authenticateToken, async (req: AuthRequest, res: Response) =
     });
 
     if (!template) {
-      return res.status(404).json({ error: 'Plantilla no encontrada' });
+      return res.status(404).json(errResp(RC.MP_TEMPLATE_NOT_FOUND, 'Template not found'));
     }
 
     const newBot = await prisma.bot.create({
@@ -80,13 +81,13 @@ router.post('/buy', authenticateToken, async (req: AuthRequest, res: Response) =
     });
 
     res.status(201).json({
-      message: 'Bot comprado exitosamente',
+      ...okResp(RC.MP_BOT_PURCHASED, 'Bot purchased successfully'),
       bot: newBot,
       subscription,
     });
   } catch (error) {
     console.error(error);
-    res.status(500).json({ error: 'Error al comprar el bot' });
+    res.status(500).json(errResp(RC.MP_BOT_PURCHASE_FAIL, 'Failed to purchase bot'));
   }
 });
 

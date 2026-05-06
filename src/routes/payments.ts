@@ -2,6 +2,7 @@ import { Router, Response, Request } from 'express';
 import crypto from 'crypto';
 import { prisma } from '../server';
 import { authenticateToken, AuthRequest } from '../middleware/auth';
+import { errResp, okResp, RC } from '../utils/responses';
 
 const router = Router();
 
@@ -29,12 +30,12 @@ async function lemonApi(path: string): Promise<any> {
 router.post('/checkout-custom', authenticateToken, async (req: AuthRequest, res: Response) => {
   try {
     if (!LEMON_BUY_URL) {
-      return res.status(500).json({ error: 'Pasarela de pago no configurada' });
+      return res.status(500).json(errResp(RC.PAY_GATEWAY_DOWN, 'Payment gateway not configured'));
     }
 
     const { botName } = req.body;
     const user = await prisma.user.findUnique({ where: { id: req.userId } });
-    if (!user) return res.status(404).json({ error: 'Usuario no encontrado' });
+    if (!user) return res.status(404).json(errResp(RC.USER_NOT_FOUND, 'User not found'));
 
     const params = new URLSearchParams();
     params.set('checkout[email]', user.email);
@@ -46,7 +47,7 @@ router.post('/checkout-custom', authenticateToken, async (req: AuthRequest, res:
     res.json({ url });
   } catch (error: any) {
     console.error('Lemon checkout error:', error);
-    res.status(500).json({ error: error.message || 'Error al crear sesión de pago' });
+    res.status(500).json(errResp(RC.PAY_CHECKOUT_FAIL, 'Failed to create checkout session'));
   }
 });
 
@@ -57,17 +58,18 @@ interface SanitizedBot {
   description: string;
   parameters: Record<string, any>;
 }
-function sanitizeBotConfig(raw: any): { error: string; data: null } | { error: null; data: SanitizedBot } {
-  if (!raw || typeof raw !== 'object') return { error: 'Configuración del bot requerida', data: null };
+type SanitizeError = { code: string; fallback: string };
+function sanitizeBotConfig(raw: any): { error: SanitizeError; data: null } | { error: null; data: SanitizedBot } {
+  if (!raw || typeof raw !== 'object') return { error: { code: RC.PAY_CONFIG_REQUIRED, fallback: 'Bot configuration required' }, data: null };
 
   const name = typeof raw.name === 'string' ? raw.name.trim() : '';
   if (name.length === 0 || name.length > 60) {
-    return { error: 'Nombre de bot inválido (1-60 caracteres)', data: null };
+    return { error: { code: RC.PAY_NAME_INVALID, fallback: 'Invalid bot name (1-60 characters)' }, data: null };
   }
   const strategy = typeof raw.strategy === 'string' ? raw.strategy : '';
   const allowedStrategies = ['scalping','swing','momentum','mean','breakout','grid','trend','dca','hedge','reversal'];
   if (!allowedStrategies.includes(strategy)) {
-    return { error: 'Estrategia no válida', data: null };
+    return { error: { code: RC.PAY_STRATEGY_INVALID, fallback: 'Invalid strategy' }, data: null };
   }
 
   const description = typeof raw.description === 'string' ? raw.description.slice(0, 200) : '';
@@ -189,11 +191,11 @@ router.post('/verify', authenticateToken, async (req: AuthRequest, res: Response
   try {
     const { orderNumber, botConfig } = req.body;
     if (!LEMON_API_KEY || !LEMON_STORE_ID) {
-      return res.status(500).json({ error: 'Pasarela de pago no configurada' });
+      return res.status(500).json(errResp(RC.PAY_GATEWAY_DOWN, 'Payment gateway not configured'));
     }
 
     const reqUser = await prisma.user.findUnique({ where: { id: req.userId } });
-    if (!reqUser) return res.status(404).json({ error: 'Usuario no encontrado' });
+    if (!reqUser) return res.status(404).json(errResp(RC.USER_NOT_FOUND, 'User not found'));
     const myEmail = (reqUser.email || '').toLowerCase();
 
     let order: any = null;
@@ -248,13 +250,13 @@ router.post('/verify', authenticateToken, async (req: AuthRequest, res: Response
     }
 
     if (!order) {
-      return res.status(404).json({ error: 'Orden no encontrada o ya procesada' });
+      return res.status(404).json(errResp(RC.PAY_ORDER_NOT_FOUND, 'Order not found or already processed'));
     }
 
     const attrs = order.attributes || {};
     const status = attrs.status;
     if (status !== 'paid') {
-      return res.status(400).json({ error: 'Pago no confirmado', status });
+      return res.status(400).json({ ...errResp(RC.PAY_NOT_CONFIRMED, 'Payment not confirmed'), status });
     }
 
     // Validación final de propietario
@@ -263,7 +265,7 @@ router.post('/verify', authenticateToken, async (req: AuthRequest, res: Response
     const matchById = customUserId && customUserId === req.userId;
     const matchByEmail = orderEmail && myEmail && orderEmail === myEmail;
     if (!matchById && !matchByEmail) {
-      return res.status(403).json({ error: 'La orden no pertenece a este usuario' });
+      return res.status(403).json(errResp(RC.PAY_FOREIGN_ORDER, 'Order does not belong to this user'));
     }
 
     // Idempotencia: la columna lemonOrderId tiene UNIQUE en BD, así que dos
@@ -272,12 +274,12 @@ router.post('/verify', authenticateToken, async (req: AuthRequest, res: Response
     const orderKey = String(order.id);
     const existing = await findBotByLemonOrderId(orderKey);
     if (existing) {
-      return res.json({ message: 'Pago ya verificado', bot: existing });
+      return res.json({ ...okResp(RC.PAY_ALREADY_VERIFIED, 'Payment already verified'), bot: existing });
     }
 
     const sanitized = sanitizeBotConfig(botConfig);
     if (sanitized.error) {
-      return res.status(400).json({ error: sanitized.error });
+      return res.status(400).json(errResp(sanitized.error.code, sanitized.error.fallback));
     }
     const data = sanitized.data!;
 
@@ -297,15 +299,15 @@ router.post('/verify', authenticateToken, async (req: AuthRequest, res: Response
       if (e?.code === 'P2002') {
         // Carrera: otro request ganó el create. Devolvemos el bot existente.
         const winner = await findBotByLemonOrderId(orderKey);
-        if (winner) return res.json({ message: 'Pago ya verificado', bot: winner });
+        if (winner) return res.json({ ...okResp(RC.PAY_ALREADY_VERIFIED, 'Payment already verified'), bot: winner });
       }
       throw e;
     }
 
-    res.json({ message: 'Pago verificado y bot creado', bot });
+    res.json({ ...okResp(RC.PAY_VERIFIED, 'Payment verified and bot created'), bot });
   } catch (error: any) {
     console.error('Verify error:', error);
-    res.status(500).json({ error: error.message || 'Error al verificar el pago' });
+    res.status(500).json(errResp(RC.PAY_VERIFY_FAIL, 'Failed to verify payment'));
   }
 });
 
@@ -331,11 +333,11 @@ async function findBotByLemonOrderId(orderId: string) {
 router.post('/recover', authenticateToken, async (req: AuthRequest, res: Response) => {
   try {
     if (!LEMON_API_KEY || !LEMON_STORE_ID) {
-      return res.status(500).json({ error: 'Pasarela de pago no configurada' });
+      return res.status(500).json(errResp(RC.PAY_GATEWAY_DOWN, 'Payment gateway not configured'));
     }
 
     const reqUser = await prisma.user.findUnique({ where: { id: req.userId } });
-    if (!reqUser) return res.status(404).json({ error: 'Usuario no encontrado' });
+    if (!reqUser) return res.status(404).json(errResp(RC.USER_NOT_FOUND, 'User not found'));
 
     const list = await lemonApi(
       `/orders?filter[store_id]=${encodeURIComponent(LEMON_STORE_ID)}&page[size]=100`
@@ -395,13 +397,13 @@ router.post('/recover', authenticateToken, async (req: AuthRequest, res: Respons
     }
 
     return res.json({
-      message: `${recovered.length} bot(s) recuperado(s)`,
+      ...okResp(RC.PAY_RECOVER_OK, `${recovered.length} bot(s) recovered`, { args: { count: recovered.length } }),
       count: recovered.length,
       recovered,
     });
   } catch (error: any) {
     console.error('Recover error:', error);
-    res.status(500).json({ error: error.message || 'Error recuperando bots' });
+    res.status(500).json(errResp(RC.PAY_RECOVER_FAIL, 'Failed to recover bots'));
   }
 });
 

@@ -1,6 +1,7 @@
 import { Request, Response, NextFunction } from 'express';
 import jwt from 'jsonwebtoken';
 import { prisma } from '../server';
+import { errResp, RC } from '../utils/responses';
 
 interface AuthRequest extends Request {
   userId?: string;
@@ -31,24 +32,24 @@ export const authenticateToken = async (req: AuthRequest, res: Response, next: N
   const token = authHeader && authHeader.split(' ')[1];
 
   if (!token) {
-    return res.status(401).json({ error: 'Token requerido' });
+    return res.status(401).json(errResp(RC.AUTH_TOKEN_REQUIRED, 'Token required'));
   }
 
   let decoded: any;
   try {
     decoded = jwt.verify(token, JWT_SECRET);
   } catch {
-    return res.status(403).json({ error: 'Token inválido' });
+    return res.status(403).json(errResp(RC.AUTH_TOKEN_INVALID, 'Invalid token'));
   }
 
   // Rechaza tokens pre-MFA: el pendingToken solo sirve para /verify-login
   // y /resend-login-code, no para autenticarse en el resto de la API.
   if (decoded?.type === 'pending-login') {
-    return res.status(403).json({ error: 'Token de login pendiente. Completa la verificación primero.' });
+    return res.status(403).json(errResp(RC.AUTH_TOKEN_PENDING, 'Pending login token. Complete verification first.'));
   }
 
   if (!decoded?.userId) {
-    return res.status(403).json({ error: 'Token inválido' });
+    return res.status(403).json(errResp(RC.AUTH_TOKEN_INVALID, 'Invalid token'));
   }
 
   // Validación de tokenVersion: invalida sesiones tras cambio de contraseña /
@@ -61,13 +62,13 @@ export const authenticateToken = async (req: AuthRequest, res: Response, next: N
       where: { id: decoded.userId },
       select: { tokenVersion: true },
     });
-    if (!user) return res.status(403).json({ error: 'Sesión expirada' });
+    if (!user) return res.status(403).json(errResp(RC.AUTH_SESSION_EXPIRED, 'Session expired'));
     if ((user.tokenVersion ?? 0) !== tokenTv) {
-      return res.status(403).json({ error: 'Sesión expirada. Inicia sesión de nuevo.' });
+      return res.status(403).json(errResp(RC.AUTH_SESSION_EXPIRED, 'Session expired. Sign in again.'));
     }
   } catch (err) {
     console.error('Token version check error:', err);
-    return res.status(500).json({ error: 'Error al validar la sesión' });
+    return res.status(500).json(errResp(RC.AUTH_SESSION_VALIDATION_ERROR, 'Failed to validate session'));
   }
 
   req.userId = decoded.userId;
