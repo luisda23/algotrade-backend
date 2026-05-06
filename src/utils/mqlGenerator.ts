@@ -933,15 +933,17 @@ bool HasOwnPosition()
 
 void OnTick()
 {
-   if(!CheckDailyLoss()) return;
-   if(!IsTradingHours()) return;
-   if(IsNewsTime()) return;
-   if(HasOwnPosition()) return;
-
    static datetime lastBarTime = 0;
    datetime currentBarTime = (datetime)SeriesInfoInteger(InpSymbol, InpTimeframe, SERIES_LASTBAR_DATE);
    if(currentBarTime == lastBarTime) return;
    lastBarTime = currentBarTime;
+
+   // Filtros de bloqueo evaluados solo en barra nueva (más eficiente y con
+   // log claro para que sepas por qué el bot no operó este ciclo).
+   if(!CheckDailyLoss())  { Print("[skip] pérdida diaria máxima alcanzada"); return; }
+   if(!IsTradingHours())  { Print("[skip] fuera de horario (", InpStartHour, "-", InpEndHour, " hora del broker)"); return; }
+   if(IsNewsTime())       { Print("[skip] noticia de alto impacto cercana"); return; }
+   if(HasOwnPosition())   { Print("[skip] ya hay una posición abierta de este bot"); return; }
 
    //--- Estrategia: ${strategy} · indicadores: ${indicators.join(', ') || '(ninguno)'}
    //--- Lógica: (al menos un trigger fire) AND (todos los filtros confirman)
@@ -954,13 +956,18 @@ void OnTick()
    if(${buyExpr}) buySignal = true;
    if(${sellExpr}) sellSignal = true;
 
+   Print("[eval] bar=", TimeToString(currentBarTime, TIME_DATE|TIME_MINUTES), " buy=", buySignal, " sell=", sellSignal);
+
    if(buySignal)
    {
       double ask = SymbolInfoDouble(InpSymbol, SYMBOL_ASK);
       double sl = ask * (1 - InpStopLoss/100.0);
       double tp = ask * (1 + InpTakeProfit/100.0);
       double lot = GetTradeLot(MathAbs(ask - sl) / SymbolInfoDouble(InpSymbol, SYMBOL_POINT));
-      trade.Buy(lot, InpSymbol, ask, sl, tp, "${escapeMQL(bot.name)} BUY");
+      if(!trade.Buy(lot, InpSymbol, ask, sl, tp, "${escapeMQL(bot.name)} BUY"))
+         Print("BUY rechazada: ", trade.ResultRetcode(), " ", trade.ResultRetcodeDescription(), " (lot=", lot, " sl=", sl, " tp=", tp, ")");
+      else
+         Print("BUY enviada: lot=", lot, " sl=", sl, " tp=", tp);
    }
    else if(sellSignal)
    {
@@ -968,7 +975,10 @@ void OnTick()
       double sl = bid * (1 + InpStopLoss/100.0);
       double tp = bid * (1 - InpTakeProfit/100.0);
       double lot = GetTradeLot(MathAbs(sl - bid) / SymbolInfoDouble(InpSymbol, SYMBOL_POINT));
-      trade.Sell(lot, InpSymbol, bid, sl, tp, "${escapeMQL(bot.name)} SELL");
+      if(!trade.Sell(lot, InpSymbol, bid, sl, tp, "${escapeMQL(bot.name)} SELL"))
+         Print("SELL rechazada: ", trade.ResultRetcode(), " ", trade.ResultRetcodeDescription(), " (lot=", lot, " sl=", sl, " tp=", tp, ")");
+      else
+         Print("SELL enviada: lot=", lot, " sl=", sl, " tp=", tp);
    }
 }
 

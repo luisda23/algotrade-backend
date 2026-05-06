@@ -709,12 +709,12 @@ bool HasOpenPosition()
 
 void OnTick()
 {
-   if(!CheckDailyLoss()) return;
-   if(!IsTradingHours()) return;
-   if(HasOpenPosition()) return;
-
    if(Time[0] == lastBarTime) return;
    lastBarTime = Time[0];
+
+   if(!CheckDailyLoss()) { Print("[skip] pérdida diaria máxima alcanzada"); return; }
+   if(!IsTradingHours()) { Print("[skip] fuera de horario (", InpStartHour, "-", InpEndHour, " hora del broker)"); return; }
+   if(HasOpenPosition()) { Print("[skip] ya hay una posición abierta de este bot"); return; }
 
    //--- Estrategia: ${strategy} · indicadores: ${indicators.join(', ') || '(ninguno)'}
    //--- Lógica: (al menos un trigger fire) AND (todos los filtros confirman)
@@ -725,6 +725,8 @@ void OnTick()
 
    if(${buyExpr}) buySignal = true;
    if(${sellExpr}) sellSignal = true;
+
+   Print("[eval] bar=", TimeToString(Time[0], TIME_DATE|TIME_MINUTES), " buy=", buySignal, " sell=", sellSignal);
 
    if(buySignal)
    {
