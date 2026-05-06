@@ -129,12 +129,16 @@ const INDICATOR_DEFS_MQL5: Record<string, IndDef> = {
           `   srsi_K_raw[sri - 1] = (sri_hi > sri_lo) ? (srsi_rsi[sri] - sri_lo) / (sri_hi - sri_lo) * 100.0 : 50.0;`,
           `}`,
           `double srsi_K = (srsi_K_raw[0] + srsi_K_raw[1] + srsi_K_raw[2]) / 3.0;`,
-          `static double srsi_D_prev1 = 50.0, srsi_D_prev2 = 50.0;`,
-          `static double srsi_K_prev = 50.0;`,
+          // Sembrar estado con valores reales en la primera evaluación, no con
+          // 50 hardcoded — si el K real está lejos de 50 al cargar el bot,
+          // genera un cruce falso espurio.
+          `static double srsi_D_prev1 = 0.0, srsi_D_prev2 = 0.0;`,
+          `static double srsi_K_prev = 0.0;`,
+          `static bool srsi_init = false;`,
           `double srsi_D = (srsi_K + srsi_D_prev1 + srsi_D_prev2) / 3.0;`,
-          `bool srsi_crossUp   = (srsi_K_prev <= srsi_D_prev1 && srsi_K > srsi_D);`,
-          `bool srsi_crossDown = (srsi_K_prev >= srsi_D_prev1 && srsi_K < srsi_D);`,
-          `srsi_D_prev2 = srsi_D_prev1; srsi_D_prev1 = srsi_D; srsi_K_prev = srsi_K;`,
+          `bool srsi_crossUp   = srsi_init && (srsi_K_prev <= srsi_D_prev1 && srsi_K > srsi_D);`,
+          `bool srsi_crossDown = srsi_init && (srsi_K_prev >= srsi_D_prev1 && srsi_K < srsi_D);`,
+          `srsi_D_prev2 = srsi_D_prev1; srsi_D_prev1 = srsi_D; srsi_K_prev = srsi_K; srsi_init = true;`,
         ],
         triggerBuy:  `(srsi_crossUp && srsi_K < ${lo + 30})`,
         triggerSell: `(srsi_crossDown && srsi_K > ${hi - 30})`,
@@ -256,16 +260,20 @@ const INDICATOR_DEFS_MQL5: Record<string, IndDef> = {
     release: '   IndicatorRelease(handleIchi);',
     logic: () => ({
       setup: [
+        // Senkou A/B vienen ya proyectados +26 barras al futuro: el index 0
+        // del buffer es el cloud que estará vigente DENTRO de 26 barras. Para
+        // comparar el precio actual contra el cloud actual hay que leer con
+        // shift = Kijun period (26).
         `double ichiTenkan[], ichiKijun[], ichiSenkouA[], ichiSenkouB[]; ArraySetAsSeries(ichiTenkan, true); ArraySetAsSeries(ichiKijun, true); ArraySetAsSeries(ichiSenkouA, true); ArraySetAsSeries(ichiSenkouB, true);`,
         `CopyBuffer(handleIchi, 0, 0, 3, ichiTenkan);`,
         `CopyBuffer(handleIchi, 1, 0, 3, ichiKijun);`,
-        `CopyBuffer(handleIchi, 2, 0, 1, ichiSenkouA);`,
-        `CopyBuffer(handleIchi, 3, 0, 1, ichiSenkouB);`,
+        `CopyBuffer(handleIchi, 2, 26, 1, ichiSenkouA);`,
+        `CopyBuffer(handleIchi, 3, 26, 1, ichiSenkouB);`,
       ],
-      triggerBuy:  `(ichiTenkan[1] > ichiKijun[1] && ichiTenkan[2] <= ichiKijun[2] && bidPrice > ichiSenkouA[0])`,
-      triggerSell: `(ichiTenkan[1] < ichiKijun[1] && ichiTenkan[2] >= ichiKijun[2] && bidPrice < ichiSenkouB[0])`,
-      filterBuy:   `(ichiTenkan[1] > ichiKijun[1] && bidPrice > ichiSenkouA[0])`,
-      filterSell:  `(ichiTenkan[1] < ichiKijun[1] && bidPrice < ichiSenkouB[0])`,
+      triggerBuy:  `(ichiTenkan[1] > ichiKijun[1] && ichiTenkan[2] <= ichiKijun[2] && bidPrice > ichiSenkouA[0] && bidPrice > ichiSenkouB[0])`,
+      triggerSell: `(ichiTenkan[1] < ichiKijun[1] && ichiTenkan[2] >= ichiKijun[2] && bidPrice < ichiSenkouA[0] && bidPrice < ichiSenkouB[0])`,
+      filterBuy:   `(ichiTenkan[1] > ichiKijun[1] && bidPrice > ichiSenkouA[0] && bidPrice > ichiSenkouB[0])`,
+      filterSell:  `(ichiTenkan[1] < ichiKijun[1] && bidPrice < ichiSenkouA[0] && bidPrice < ichiSenkouB[0])`,
     }),
   },
   psar: {
@@ -292,17 +300,23 @@ const INDICATOR_DEFS_MQL5: Record<string, IndDef> = {
     release: '   IndicatorRelease(handleST_ATR);',
     logic: () => ({
       setup: [
-        `double stAtrBuf[]; ArraySetAsSeries(stAtrBuf, true); CopyBuffer(handleST_ATR, 0, 0, 1, stAtrBuf);`,
+        // ATR de la barra cerrada (shift=1). Si lo leyéramos en shift 0, el
+        // valor cambia con cada tick y st_line/st_dir repintarían dentro de
+        // la misma barra, dando flips fantasma.
+        `double stAtrBuf[]; ArraySetAsSeries(stAtrBuf, true); CopyBuffer(handleST_ATR, 0, 1, 1, stAtrBuf);`,
         `double stMid = (iHigh(InpSymbol, InpTimeframe, 1) + iLow(InpSymbol, InpTimeframe, 1)) / 2.0;`,
         `double stClosePrev = iClose(InpSymbol, InpTimeframe, 1);`,
         `double stBasicUp = stMid + 3.0 * stAtrBuf[0];`,
         `double stBasicDn = stMid - 3.0 * stAtrBuf[0];`,
         `static double st_line = 0;`,
         `static int st_dir = 0;`,
+        `static bool st_init = false;`,
         `int st_prevDir = st_dir;`,
-        `if(st_dir == 0) {`,
+        `if(!st_init) {`,
         `   st_dir = (stClosePrev > stMid) ? 1 : -1;`,
         `   st_line = (st_dir == 1) ? stBasicDn : stBasicUp;`,
+        `   st_prevDir = st_dir; // sin flip espurio en la primera barra`,
+        `   st_init = true;`,
         `} else if(st_dir == 1) {`,
         `   double newLine = MathMax(stBasicDn, st_line);`,
         `   if(stClosePrev < newLine) { st_dir = -1; st_line = stBasicUp; } else { st_line = newLine; }`,
@@ -324,28 +338,31 @@ const INDICATOR_DEFS_MQL5: Record<string, IndDef> = {
     init: '   handleBB = iBands(InpSymbol, InpTimeframe, 20, 0, 2.0, PRICE_CLOSE);\n   if(handleBB == INVALID_HANDLE) { Print("Error creando Bollinger"); return INIT_FAILED; }',
     release: '   IndicatorRelease(handleBB);',
     logic: (s) => {
+      // Bandas leídas en barras CERRADAS (shift 1 y 2): así el breakout no
+      // repinta dentro de la barra que se está formando. arr[0]=bar1, arr[1]=bar2.
       const setup = [
         `double bbUpper[], bbLower[], bbMiddle[]; ArraySetAsSeries(bbUpper, true); ArraySetAsSeries(bbLower, true); ArraySetAsSeries(bbMiddle, true);`,
-        `CopyBuffer(handleBB, UPPER_BAND, 0, 2, bbUpper);`,
-        `CopyBuffer(handleBB, LOWER_BAND, 0, 2, bbLower);`,
-        `CopyBuffer(handleBB, BASE_LINE, 0, 2, bbMiddle);`,
-        `double bbPrevClose = iClose(InpSymbol, InpTimeframe, 1);`,
+        `CopyBuffer(handleBB, UPPER_BAND, 1, 2, bbUpper);`,
+        `CopyBuffer(handleBB, LOWER_BAND, 1, 2, bbLower);`,
+        `CopyBuffer(handleBB, BASE_LINE, 1, 2, bbMiddle);`,
+        `double bbPrevClose     = iClose(InpSymbol, InpTimeframe, 1);`,
+        `double bbPrevPrevClose = iClose(InpSymbol, InpTimeframe, 2);`,
       ];
       if (isReversal(s)) {
         return {
           setup,
-          triggerBuy:  `(bidPrice <= bbLower[0] && bbPrevClose > bbLower[1])`, // recién toca banda inferior
-          triggerSell: `(bidPrice >= bbUpper[0] && bbPrevClose < bbUpper[1])`,
-          filterBuy:   `bidPrice <= bbMiddle[0]`,                                // continua si está debajo de la media
-          filterSell:  `bidPrice >= bbMiddle[0]`,
+          triggerBuy:  `(bbPrevClose <= bbLower[0] && bbPrevPrevClose > bbLower[1])`,
+          triggerSell: `(bbPrevClose >= bbUpper[0] && bbPrevPrevClose < bbUpper[1])`,
+          filterBuy:   `bbPrevClose <= bbMiddle[0]`,
+          filterSell:  `bbPrevClose >= bbMiddle[0]`,
         };
       }
       return {
         setup,
-        triggerBuy:  `(bidPrice >= bbUpper[0] && bbPrevClose < bbUpper[1])`,
-        triggerSell: `(bidPrice <= bbLower[0] && bbPrevClose > bbLower[1])`,
-        filterBuy:   `bidPrice >= bbMiddle[0]`,
-        filterSell:  `bidPrice <= bbMiddle[0]`,
+        triggerBuy:  `(bbPrevClose >= bbUpper[0] && bbPrevPrevClose < bbUpper[1])`,
+        triggerSell: `(bbPrevClose <= bbLower[0] && bbPrevPrevClose > bbLower[1])`,
+        filterBuy:   `bbPrevClose >= bbMiddle[0]`,
+        filterSell:  `bbPrevClose <= bbMiddle[0]`,
       };
     },
   },
@@ -386,28 +403,33 @@ const INDICATOR_DEFS_MQL5: Record<string, IndDef> = {
     init: '   handleKC_EMA = iMA(InpSymbol, InpTimeframe, 20, 0, MODE_EMA, PRICE_CLOSE);\n   handleKC_ATR = iATR(InpSymbol, InpTimeframe, 10);\n   if(handleKC_EMA == INVALID_HANDLE || handleKC_ATR == INVALID_HANDLE) { Print("Error creando Keltner"); return INIT_FAILED; }',
     release: '   IndicatorRelease(handleKC_EMA);\n   IndicatorRelease(handleKC_ATR);',
     logic: (s) => {
+      // EMA y ATR de barras CERRADAS (shift 1 y 2). arr[0]=bar1, arr[1]=bar2.
       const setup = [
         `double kcEma[], kcAtr[]; ArraySetAsSeries(kcEma, true); ArraySetAsSeries(kcAtr, true);`,
-        `CopyBuffer(handleKC_EMA, 0, 0, 1, kcEma);`,
-        `CopyBuffer(handleKC_ATR, 0, 0, 1, kcAtr);`,
-        `double kcUpper = kcEma[0] + 2.0 * kcAtr[0];`,
-        `double kcLower = kcEma[0] - 2.0 * kcAtr[0];`,
+        `CopyBuffer(handleKC_EMA, 0, 1, 2, kcEma);`,
+        `CopyBuffer(handleKC_ATR, 0, 1, 2, kcAtr);`,
+        `double kcUpper      = kcEma[0] + 2.0 * kcAtr[0];`,
+        `double kcLower      = kcEma[0] - 2.0 * kcAtr[0];`,
+        `double kcUpperPrev  = kcEma[1] + 2.0 * kcAtr[1];`,
+        `double kcLowerPrev  = kcEma[1] - 2.0 * kcAtr[1];`,
+        `double kcPrevClose     = iClose(InpSymbol, InpTimeframe, 1);`,
+        `double kcPrevPrevClose = iClose(InpSymbol, InpTimeframe, 2);`,
       ];
       if (isReversal(s)) {
         return {
           setup,
-          triggerBuy:  `bidPrice <= kcLower`,
-          triggerSell: `bidPrice >= kcUpper`,
-          filterBuy:   `bidPrice <= kcEma[0]`,
-          filterSell:  `bidPrice >= kcEma[0]`,
+          triggerBuy:  `(kcPrevClose <= kcLower && kcPrevPrevClose > kcLowerPrev)`,
+          triggerSell: `(kcPrevClose >= kcUpper && kcPrevPrevClose < kcUpperPrev)`,
+          filterBuy:   `kcPrevClose <= kcEma[0]`,
+          filterSell:  `kcPrevClose >= kcEma[0]`,
         };
       }
       return {
         setup,
-        triggerBuy:  `bidPrice >= kcUpper`,
-        triggerSell: `bidPrice <= kcLower`,
-        filterBuy:   `bidPrice >= kcEma[0]`,
-        filterSell:  `bidPrice <= kcEma[0]`,
+        triggerBuy:  `(kcPrevClose >= kcUpper && kcPrevPrevClose < kcUpperPrev)`,
+        triggerSell: `(kcPrevClose <= kcLower && kcPrevPrevClose > kcLowerPrev)`,
+        filterBuy:   `kcPrevClose >= kcEma[0]`,
+        filterSell:  `kcPrevClose <= kcEma[0]`,
       };
     },
   },
