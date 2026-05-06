@@ -24,6 +24,7 @@ model User {
   resetToken              String?   // Hash SHA-256 del token de reset (32 bytes random ya entropía alta — bcrypt no aporta y bloquea CPU)
   resetTokenExpires       DateTime?
   tokenVersion            Int       @default(0)  // Embebido en cada JWT. Bumpear este número invalida TODAS las sesiones del usuario (cambio de contraseña / email / logout-everywhere).
+  lang                    String    @default("es")  // Idioma preferido para los emails ('es' | 'en'). Lo recibimos del frontend en signup y en el toggle de idioma del app.
 
   bots          Bot[]
   brokers       BrokerConnection[]

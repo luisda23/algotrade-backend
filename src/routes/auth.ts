@@ -88,11 +88,18 @@ interface SignupBody {
   password: string;
   name: string;
   referralCode?: string;
+  lang?: string;
 }
 
 interface LoginBody {
   email: string;
   password: string;
+}
+
+// Normaliza el lang recibido del cliente. Acepta solo 'es' o 'en'; cualquier
+// otra cosa cae a 'es' como default.
+function normalizeLang(raw: unknown): 'es' | 'en' {
+  return raw === 'en' ? 'en' : 'es';
 }
 
 router.post('/signup', signupLimiter, async (req: Request, res: Response) => {
@@ -109,6 +116,7 @@ router.post('/signup', signupLimiter, async (req: Request, res: Response) => {
     const password = typeof raw.password === 'string' ? raw.password : '';
     const name = typeof raw.name === 'string' ? raw.name.trim() : '';
     const referralCode = typeof raw.referralCode === 'string' ? raw.referralCode.trim() : undefined;
+    const lang = normalizeLang(raw.lang);
 
     if (!email || !password || !name) {
       return res.status(400).json({ error: 'Email, contraseña y nombre requeridos' });
@@ -140,6 +148,7 @@ router.post('/signup', signupLimiter, async (req: Request, res: Response) => {
           email,
           password: hashedPassword,
           name,
+          lang,
           referredBy: referralCode || null,
           emailVerified: false,  // Se verifica en el primer login con un código
         },
@@ -155,7 +164,7 @@ router.post('/signup', signupLimiter, async (req: Request, res: Response) => {
 
     // Email de bienvenida (no bloqueante — si falla seguimos)
     try {
-      await sendWelcomeEmail(email, name);
+      await sendWelcomeEmail(email, name, lang);
     } catch (mailErr: any) {
       console.error('Welcome email send error:', mailErr);
     }
@@ -206,7 +215,7 @@ router.post('/login', loginLimiter, async (req: Request, res: Response) => {
       });
 
       try {
-        await sendLoginCodeEmail(user.email, user.name, code);
+        await sendLoginCodeEmail(user.email, user.name, code, user.lang as any);
       } catch (mailErr: any) {
         console.error('Login code email error:', mailErr);
         return res.status(500).json({ error: 'No se pudo enviar el código. Intenta de nuevo.' });
@@ -312,7 +321,7 @@ router.put('/me', authenticateToken, async (req: AuthRequest, res: Response) => 
         });
 
         try {
-          await sendEmailChangeCode(newEmail, me.name, code, me.email);
+          await sendEmailChangeCode(newEmail, me.name, code, me.email, me.lang as any);
         } catch (mailErr: any) {
           console.error('Email change code send error:', mailErr);
           // Limpiamos para no dejar estado inconsistente
@@ -531,7 +540,7 @@ router.post('/resend-login-code', codeLimiter, async (req: Request, res: Respons
     });
 
     try {
-      await sendLoginCodeEmail(user.email, user.name, code);
+      await sendLoginCodeEmail(user.email, user.name, code, user.lang as any);
     } catch (mailErr: any) {
       console.error('Login code resend error:', mailErr);
       return res.status(500).json({ error: 'No se pudo enviar el email. Intenta de nuevo.' });
@@ -577,10 +586,13 @@ router.post('/forgot-password', forgotLimiter, async (req: Request, res: Respons
     });
 
     const frontendBase = process.env.FRONTEND_URL || 'https://yudbot.com';
-    const resetUrl = `${frontendBase}/app?reset=${token}&id=${user.id}`;
+    // El reset URL apunta al app del idioma del usuario para que la pantalla
+    // donde introduzca la contraseña esté en su idioma.
+    const appPath = user.lang === 'en' ? '/en/app' : '/app';
+    const resetUrl = `${frontendBase}${appPath}?reset=${token}&id=${user.id}`;
 
     try {
-      await sendPasswordResetEmail(user.email, user.name, resetUrl);
+      await sendPasswordResetEmail(user.email, user.name, resetUrl, user.lang as any);
     } catch (mailErr: any) {
       console.error('Reset email send error:', mailErr);
       // Limpiar token para no dejar estado inconsistente
@@ -708,6 +720,20 @@ router.post('/change-password', authenticateToken, async (req: AuthRequest, res:
     const token = issueSessionToken({ id: updated.id, email: updated.email, tokenVersion: updated.tokenVersion });
 
     res.json({ message: 'Contraseña actualizada', token });
+  } catch (error: any) {
+    console.error(error);
+    res.status(500).json({ error: 'Error en el servidor' });
+  }
+});
+
+// Cambia el idioma preferido para los emails. El frontend llama a este
+// endpoint cuando el usuario pulsa el toggle ES/EN en la cuenta. La sesión
+// no se invalida (no es un cambio sensible).
+router.post('/lang', authenticateToken, async (req: AuthRequest, res: Response) => {
+  try {
+    const lang = normalizeLang(req.body?.lang);
+    await prisma.user.update({ where: { id: req.userId }, data: { lang } });
+    res.json({ message: 'Lang updated', lang });
   } catch (error: any) {
     console.error(error);
     res.status(500).json({ error: 'Error en el servidor' });
