@@ -915,12 +915,28 @@ double GetTradeLot(double stopLossPips)
    return CalculateLotSize(stopLossPips);
 }
 
+// Cuenta solo posiciones abiertas POR ESTE bot (mismo magic + símbolo). Sin
+// este filtro, PositionsTotal() incluye posiciones de otros EAs o trades
+// manuales y bloquearía al bot mientras existan.
+bool HasOwnPosition()
+{
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+   {
+      if(position.SelectByIndex(i))
+      {
+         if(position.Magic() == InpMagicNumber && position.Symbol() == InpSymbol)
+            return true;
+      }
+   }
+   return false;
+}
+
 void OnTick()
 {
    if(!CheckDailyLoss()) return;
    if(!IsTradingHours()) return;
    if(IsNewsTime()) return;
-   if(PositionsTotal() > 0) return;
+   if(HasOwnPosition()) return;
 
    static datetime lastBarTime = 0;
    datetime currentBarTime = (datetime)SeriesInfoInteger(InpSymbol, InpTimeframe, SERIES_LASTBAR_DATE);
