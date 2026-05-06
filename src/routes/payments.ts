@@ -82,6 +82,70 @@ function sanitizeBotConfig(raw: any): { error: string; data: null } | { error: n
   if (cleanParams.timeframe && !ALLOWED_TF.includes(cleanParams.timeframe)) {
     delete cleanParams.timeframe;
   }
+
+  // Whitelist de indicadores. Sin esto, un usuario puede inyectar strings
+  // arbitrarios que el generator no conoce y, si en el futuro alguien
+  // refactoriza el generator concatenando el id al código MQL, hay
+  // inyección de código directa.
+  const ALLOWED_INDICATORS = new Set([
+    'rsi','stoch','stochrsi','cci','willr','roc',
+    'ema','sma','macd','adx','ichimoku','psar','supertrend',
+    'bb','atr','donchian','keltner',
+    'volume','vol','obv','vwap','mfi',
+    'fib','pivot','sr',
+  ]);
+  if (Array.isArray(cleanParams.indicators)) {
+    cleanParams.indicators = cleanParams.indicators
+      .filter((i: unknown) => typeof i === 'string' && ALLOWED_INDICATORS.has(i))
+      .slice(0, 24); // tope: nadie necesita más de los 24 que tenemos
+  } else {
+    cleanParams.indicators = [];
+  }
+
+  // Validar bounds en risk
+  if (cleanParams.risk && typeof cleanParams.risk === 'object') {
+    const r: any = {};
+    const numField = (key: string, min: number, max: number) => {
+      const v = cleanParams.risk[key];
+      if (typeof v === 'number' && isFinite(v)) r[key] = Math.min(max, Math.max(min, v));
+    };
+    numField('stopLoss', 0.05, 50);
+    numField('takeProfit', 0.05, 100);
+    numField('posSize', 0.1, 50);
+    numField('dailyLoss', 0.5, 50);
+    cleanParams.risk = r;
+  }
+
+  // Validar news
+  if (cleanParams.news && typeof cleanParams.news === 'object') {
+    const n: any = {};
+    n.enabled = cleanParams.news.enabled === true;
+    if (typeof cleanParams.news.beforeMin === 'number' && isFinite(cleanParams.news.beforeMin)) {
+      n.beforeMin = Math.min(180, Math.max(0, Math.floor(cleanParams.news.beforeMin)));
+    }
+    if (typeof cleanParams.news.afterMin === 'number' && isFinite(cleanParams.news.afterMin)) {
+      n.afterMin = Math.min(180, Math.max(0, Math.floor(cleanParams.news.afterMin)));
+    }
+    if (cleanParams.news.impactMin === 'high' || cleanParams.news.impactMin === 'medium' || cleanParams.news.impactMin === 'all') {
+      n.impactMin = cleanParams.news.impactMin;
+    }
+    if (Array.isArray(cleanParams.news.events)) {
+      n.events = cleanParams.news.events
+        .filter((e: unknown) => typeof e === 'string' && e.length < 200)
+        .slice(0, 50);
+    }
+    cleanParams.news = n;
+  }
+
+  // Validar funded
+  if (cleanParams.funded && typeof cleanParams.funded === 'object') {
+    const f: any = { enabled: cleanParams.funded.enabled === true };
+    if (typeof cleanParams.funded.firm === 'string' && cleanParams.funded.firm.length < 60) {
+      f.firm = cleanParams.funded.firm;
+    }
+    cleanParams.funded = f;
+  }
+
   // Sanity bounds en lot
   if (cleanParams.lot && typeof cleanParams.lot === 'object') {
     const lot: any = {};
@@ -92,6 +156,25 @@ function sanitizeBotConfig(raw: any): { error: string; data: null } | { error: n
       lot.fixedLot = Math.min(100, Math.max(0.01, cleanParams.lot.fixedLot));
     }
     cleanParams.lot = lot;
+  }
+
+  // Validar campos string simples (avatar, market, pair). Tope a 32 chars y
+  // sin caracteres raros que puedan acabar concatenados al MQL generado.
+  const safeShortStr = (v: unknown): string | undefined => {
+    if (typeof v !== 'string') return undefined;
+    const trimmed = v.trim().slice(0, 32);
+    if (!/^[A-Za-z0-9._/\- ]+$/.test(trimmed)) return undefined;
+    return trimmed;
+  };
+  const a = safeShortStr(cleanParams.avatar); if (a !== undefined) cleanParams.avatar = a; else delete cleanParams.avatar;
+  const m = safeShortStr(cleanParams.market); if (m !== undefined) cleanParams.market = m; else delete cleanParams.market;
+  const p = safeShortStr(cleanParams.pair);   if (p !== undefined) cleanParams.pair = p;   else delete cleanParams.pair;
+
+  // leverage: número 1..1000
+  if (typeof cleanParams.leverage === 'number' && isFinite(cleanParams.leverage)) {
+    cleanParams.leverage = Math.min(1000, Math.max(1, Math.floor(cleanParams.leverage)));
+  } else {
+    delete cleanParams.leverage;
   }
 
   return { error: null, data: { name, strategy, description, parameters: cleanParams } };

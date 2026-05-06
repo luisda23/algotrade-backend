@@ -470,20 +470,38 @@ const INDICATOR_DEFS_MQL5: Record<string, IndDef> = {
   },
   vwap: {
     logic: () => ({
+      // VWAP intra-día con WARM-UP: si el bot se carga a media sesión, sin
+      // back-fill el acumulado arrancaría en 0 y el VWAP sería inútil hasta
+      // acumular suficiente. Aquí, al cambiar de día (o en la primera
+      // ejecución) reconstruimos cumPV/cumV recorriendo todas las barras
+      // cerradas del día actual desde la 00:00.
       setup: [
         `MqlDateTime vwap_dt; TimeToStruct(TimeCurrent(), vwap_dt);`,
+        `int vwap_today = vwap_dt.year * 10000 + vwap_dt.mon * 100 + vwap_dt.day;`,
         `static int vwap_day = 0;`,
         `static double vwap_cumPV = 0;`,
         `static double vwap_cumV = 0;`,
         `static double vwap_prev = 0;`,
         `static double vwap_prevPrice = 0;`,
-        `if(vwap_dt.day != vwap_day) {`,
-        `   vwap_cumPV = 0; vwap_cumV = 0; vwap_day = vwap_dt.day;`,
+        `if(vwap_today != vwap_day) {`,
+        `   vwap_cumPV = 0; vwap_cumV = 0; vwap_day = vwap_today;`,
+        `   // Back-fill: sumar TP*V de cada barra cerrada del día actual.`,
+        `   datetime vwap_dayStart = StructToTime(vwap_dt) - vwap_dt.hour*3600 - vwap_dt.min*60 - vwap_dt.sec;`,
+        `   for(int vbi = 1; vbi < 10000; vbi++) {`,
+        `      datetime vbT = iTime(InpSymbol, InpTimeframe, vbi);`,
+        `      if(vbT == 0 || vbT < vwap_dayStart) break;`,
+        `      double vbTp = (iHigh(InpSymbol, InpTimeframe, vbi) + iLow(InpSymbol, InpTimeframe, vbi) + iClose(InpSymbol, InpTimeframe, vbi)) / 3.0;`,
+        `      long vbV = iVolume(InpSymbol, InpTimeframe, vbi);`,
+        `      vwap_cumPV += vbTp * vbV;`,
+        `      vwap_cumV  += vbV;`,
+        `   }`,
+        `} else {`,
+        `   // Mismo día: solo sumamos la barra recién cerrada (bar 1).`,
+        `   double vwap_tp = (iHigh(InpSymbol, InpTimeframe, 1) + iLow(InpSymbol, InpTimeframe, 1) + iClose(InpSymbol, InpTimeframe, 1)) / 3.0;`,
+        `   long vwap_v = iVolume(InpSymbol, InpTimeframe, 1);`,
+        `   vwap_cumPV += vwap_tp * vwap_v;`,
+        `   vwap_cumV  += vwap_v;`,
         `}`,
-        `double vwap_tp = (iHigh(InpSymbol, InpTimeframe, 1) + iLow(InpSymbol, InpTimeframe, 1) + iClose(InpSymbol, InpTimeframe, 1)) / 3.0;`,
-        `long vwap_v = iVolume(InpSymbol, InpTimeframe, 1);`,
-        `vwap_cumPV += vwap_tp * vwap_v;`,
-        `vwap_cumV  += vwap_v;`,
         `double vwap = (vwap_cumV > 0) ? vwap_cumPV / vwap_cumV : bidPrice;`,
         `bool vwap_crossUp   = (vwap_prev > 0 && vwap_prevPrice <= vwap_prev && bidPrice > vwap);`,
         `bool vwap_crossDown = (vwap_prev > 0 && vwap_prevPrice >= vwap_prev && bidPrice < vwap);`,

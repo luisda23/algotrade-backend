@@ -1,5 +1,6 @@
 import express, { Express, Request, Response } from 'express';
 import cors from 'cors';
+import helmet from 'helmet';
 import dotenv from 'dotenv';
 import { PrismaClient } from '@prisma/client';
 
@@ -15,25 +16,67 @@ const app: Express = express();
 const prisma = new PrismaClient();
 const PORT = process.env.PORT || 5000;
 
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
+// Railway / Vercel viven detrás de un proxy, hay que confiar en X-Forwarded-For
+// para que express-rate-limit pueda identificar IPs reales. 1 = trust 1 hop.
+app.set('trust proxy', 1);
 
-// CORS — permite frontend local y producción
+// Headers de seguridad. Desactivamos CSP porque el frontend está en otro dominio
+// (Vercel) y la API solo devuelve JSON; el resto de defaults de helmet aplican.
+app.use(
+  helmet({
+    contentSecurityPolicy: false,
+    crossOriginEmbedderPolicy: false,
+    crossOriginResourcePolicy: { policy: 'cross-origin' },
+  })
+);
+// Quita el header X-Powered-By: Express que dice al atacante el stack que usamos
+app.disable('x-powered-by');
+
+app.use(express.json({
+  verify: (req: any, _res, buf) => {
+    req.rawBody = buf;
+  },
+  limit: '100kb', // límite de payload — frena POSTs gigantes que abusan recursos
+}));
+app.use(express.urlencoded({ extended: true, limit: '100kb' }));
+
+// CORS — frontend local + producción + previews de Vercel del proyecto
 const allowedOrigins = [
   'http://localhost:3000',
   'http://localhost:3001',
   'http://127.0.0.1:3000',
+  'https://yudbot.com',
+  'https://www.yudbot.com',
   process.env.FRONTEND_URL,
 ].filter(Boolean);
 
+// Slug del team Vercel — sin esto, "algotrade-*.vercel.app" matchearía
+// también deploys de un atacante que cree un proyecto llamado "algotrade-evil"
+// en otro team. La URL de preview real tiene el formato
+// {project}-{git-hash}-{team-slug}.vercel.app, así que exigimos el team slug.
+const VERCEL_TEAM_SLUG = process.env.VERCEL_TEAM_SLUG || ''; // ej. 'luisda23s-projects'
+const VERCEL_PREVIEW_RE = VERCEL_TEAM_SLUG
+  // algotrade-<git-hash>-<team-slug>.vercel.app
+  ? new RegExp(`^algotrade(?:-[a-z0-9]+)?-${VERCEL_TEAM_SLUG.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\.vercel\\.app$`, 'i')
+  : null;
+
 app.use(cors({
   origin: (origin, callback) => {
-    // Permitir requests sin origin (Postman, curl)
-    if (!origin) return callback(null, true);
-    // Permitir Vercel preview/production deployments
-    if (origin.endsWith('.vercel.app') || allowedOrigins.includes(origin)) {
-      return callback(null, true);
+    if (!origin) return callback(null, true); // Postman, curl, server-to-server
+
+    // Whitelist explícita
+    if (allowedOrigins.includes(origin)) return callback(null, true);
+
+    // Solo previews de NUESTRO proyecto Vercel restringidos al team configurado.
+    // Si no hay VERCEL_TEAM_SLUG en env, deshabilitamos previews para no abrir
+    // un agujero CSRF al permitir cualquier algotrade-*.vercel.app.
+    if (VERCEL_PREVIEW_RE) {
+      try {
+        const u = new URL(origin);
+        if (VERCEL_PREVIEW_RE.test(u.hostname)) return callback(null, true);
+      } catch {}
     }
+
     callback(new Error('Not allowed by CORS'));
   },
   credentials: true,

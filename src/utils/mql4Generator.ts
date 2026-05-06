@@ -398,8 +398,15 @@ const INDICATOR_DEFS_MQL4: Record<string, IndDef4> = {
   },
   vwap: {
     logic: () => ({
+      // VWAP intra-día con WARM-UP: si el bot se carga a media sesión, sin
+      // back-fill el acumulado arrancaría en 0 y el VWAP sería inútil hasta
+      // acumular suficiente. Al cambiar de día (o en la primera ejecución)
+      // reconstruimos cumPV/cumV recorriendo todas las barras cerradas del
+      // día desde 00:00. La clave del día usa year+month+day para no
+      // confundir días separados un mes exacto.
       setup: [
-        `int vwap_today = TimeDay(TimeCurrent());`,
+        `datetime vwap_now = TimeCurrent();`,
+        `int vwap_today = TimeYear(vwap_now)*10000 + TimeMonth(vwap_now)*100 + TimeDay(vwap_now);`,
         `static int vwap_day = 0;`,
         `static double vwap_cumPV = 0;`,
         `static double vwap_cumV = 0;`,
@@ -407,11 +414,21 @@ const INDICATOR_DEFS_MQL4: Record<string, IndDef4> = {
         `static double vwap_prevPrice = 0;`,
         `if(vwap_today != vwap_day) {`,
         `   vwap_cumPV = 0; vwap_cumV = 0; vwap_day = vwap_today;`,
+        `   datetime vwap_dayStart = vwap_now - TimeHour(vwap_now)*3600 - TimeMinute(vwap_now)*60 - TimeSeconds(vwap_now);`,
+        `   for(int vbi = 1; vbi < 10000; vbi++) {`,
+        `      datetime vbT = iTime(Symbol(), InpTimeframe, vbi);`,
+        `      if(vbT == 0 || vbT < vwap_dayStart) break;`,
+        `      double vbTp = (iHigh(Symbol(), InpTimeframe, vbi) + iLow(Symbol(), InpTimeframe, vbi) + iClose(Symbol(), InpTimeframe, vbi)) / 3.0;`,
+        `      long vbV = iVolume(Symbol(), InpTimeframe, vbi);`,
+        `      vwap_cumPV += vbTp * vbV;`,
+        `      vwap_cumV  += vbV;`,
+        `   }`,
+        `} else {`,
+        `   double vwap_tp = (iHigh(Symbol(), InpTimeframe, 1) + iLow(Symbol(), InpTimeframe, 1) + iClose(Symbol(), InpTimeframe, 1)) / 3.0;`,
+        `   long vwap_v = iVolume(Symbol(), InpTimeframe, 1);`,
+        `   vwap_cumPV += vwap_tp * vwap_v;`,
+        `   vwap_cumV  += vwap_v;`,
         `}`,
-        `double vwap_tp = (iHigh(Symbol(), InpTimeframe, 1) + iLow(Symbol(), InpTimeframe, 1) + iClose(Symbol(), InpTimeframe, 1)) / 3.0;`,
-        `long vwap_v = iVolume(Symbol(), InpTimeframe, 1);`,
-        `vwap_cumPV += vwap_tp * vwap_v;`,
-        `vwap_cumV  += vwap_v;`,
         `double vwap = (vwap_cumV > 0) ? vwap_cumPV / vwap_cumV : Bid;`,
         `bool vwap_crossUp   = (vwap_prev > 0 && vwap_prevPrice <= vwap_prev && Bid > vwap);`,
         `bool vwap_crossDown = (vwap_prev > 0 && vwap_prevPrice >= vwap_prev && Bid < vwap);`,
@@ -626,6 +643,7 @@ export function generateMQL4(bot: {
 #property description "Par: ${pair} · Apalancamiento: 1:${leverage}"
 
 extern string  _GENERAL              = "═══ CONFIGURACIÓN GENERAL ═══";
+extern string  InpSymbol             = "${symbol}";
 extern int     InpTimeframe          = ${timeframeMQL};
 extern int     InpMagicNumber        = ${magicNumber};
 extern int     InpSlippage           = 10;
@@ -657,6 +675,18 @@ int OnInit()
    Print("  ${escapeMQL(bot.name)}");
    Print("  Generado por YudBot · ${generatedDate}");
    Print("═══════════════════════════════════════");
+
+   // Refuso operar sobre un chart de símbolo distinto al configurado: si
+   // generaste el bot para EURUSD y lo arrastras a un chart de GBPUSD, el
+   // EA debe abortar en lugar de operar silenciosamente en el par
+   // equivocado. MT4 no expone los iX() con symbol arbitrario fiable en
+   // todos los brokers, así que aquí exigimos chart == InpSymbol.
+   if(StringCompare(Symbol(), InpSymbol, false) != 0)
+   {
+      Print("Error: el bot está configurado para ", InpSymbol, " pero el chart es ", Symbol(), ". Adjúntalo a un chart de ", InpSymbol, ".");
+      return INIT_FAILED;
+   }
+
    initialBalance = AccountBalance();
    dailyStartBalance = initialBalance;
    lastDayCheck = TimeCurrent();
@@ -671,7 +701,12 @@ void OnDeinit(const int reason) { Print("Bot detenido. Razón: ", reason); }
 bool CheckDailyLoss()
 {
    datetime now = TimeCurrent();
-   if(TimeDay(now) != TimeDay(lastDayCheck))
+   // TimeDay solo devuelve día del mes (1-31). Comparar TimeDay(now) vs
+   // TimeDay(lastDayCheck) falla si entre ambos pasó exactamente un mes
+   // (mismo día numérico distinto mes). Comparamos year+month+day.
+   int nowKey  = TimeYear(now)*10000 + TimeMonth(now)*100 + TimeDay(now);
+   int lastKey = TimeYear(lastDayCheck)*10000 + TimeMonth(lastDayCheck)*100 + TimeDay(lastDayCheck);
+   if(nowKey != lastKey)
    {
       dailyStartBalance = AccountBalance();
       lastDayCheck = now;

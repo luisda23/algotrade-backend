@@ -31,10 +31,11 @@
     "cors": "^2.8.6",
     "dotenv": "^17.4.2",
     "express": "^5.2.1",
+    "express-rate-limit": "^8.5.0",
+    "helmet": "^8.1.0",
     "jsonwebtoken": "^9.0.3",
     "prisma": "^5.22.0",
     "resend": "^4.0.1",
-    "stripe": "^22.1.0",
     "typescript": "^5.9.3"
   },
   "devDependencies": {
